@@ -8,6 +8,9 @@ collab_group=a3-collab
 release_marker=.a3-release-complete
 forwarded_ssh_auth_sock=
 private_git_known_hosts=
+incomplete_release_destination=
+incomplete_release_temporary=
+incomplete_release_owned=false
 github_host_key='github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'
 github_host_key_fingerprint='SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU'
 
@@ -17,9 +20,21 @@ fail() {
 }
 
 cleanup() {
+    local status=$?
+    if [[ "${status}" -ne 0 && "${incomplete_release_owned}" == true && \
+        "${incomplete_release_destination}" =~ ^${release_root}/[0-9a-f]{40}$ && \
+        "${incomplete_release_temporary}" =~ ^${release_root}/\.[0-9a-f]{40}\.installing$ && \
+        -d "${incomplete_release_destination}" && \
+        ! -L "${incomplete_release_destination}" && \
+        ! -e "${incomplete_release_destination}/${release_marker}" && \
+        ! -e "${incomplete_release_temporary}" && \
+        ! -L "${incomplete_release_temporary}" ]]; then
+        mv -- "${incomplete_release_destination}" "${incomplete_release_temporary}" || true
+    fi
     if [[ -n "${private_git_known_hosts}" ]]; then
         rm -f -- "${private_git_known_hosts}"
     fi
+    return "${status}"
 }
 trap cleanup EXIT
 
@@ -124,17 +139,21 @@ case "${action}" in
         install -d -m 0750 -o root -g "${collab_group}" "${temporary}"
         git_source archive --format=tar "${commit}" | \
             tar -xf - -C "${temporary}"
-        preinstall_registry_from_mirror "${temporary}"
-        UV_PYTHON_INSTALL_DIR=/opt/a3/python \
-            private_uv sync --project "${temporary}" --all-packages --frozen \
-            --extra local-controller --no-dev --no-editable
+        # Virtual environments embed absolute interpreter paths in their launchers.
+        # Put the source at its final path before creating .venv; activation remains
+        # gated by the completion marker below.
         mv -- "${temporary}" "${destination}"
+        incomplete_release_destination=${destination}
+        incomplete_release_temporary=${temporary}
+        incomplete_release_owned=true
+        preinstall_registry_from_mirror "${destination}"
         UV_PYTHON_INSTALL_DIR=/opt/a3/python \
             private_uv sync --project "${destination}" --all-packages --frozen \
             --extra local-controller --no-dev --no-editable
         printf '%s\n' "${commit}" >"${destination}/${release_marker}"
         chown -R root:"${collab_group}" "${destination}"
         chmod -R u=rwX,g=rX,o= "${destination}"
+        incomplete_release_owned=false
         activate_release "${commit}"
         ;;
     activate)
