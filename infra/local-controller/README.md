@@ -34,20 +34,22 @@ sudo bash infra/local-controller/bootstrap-host.sh check
 After review, deploy a clean committed checkout as an immutable release:
 
 ```bash
-sudo --preserve-env=SSH_AUTH_SOCK,A3_PYPI_MIRROR \
+sudo --preserve-env=A3_PYPI_MIRROR \
   /usr/local/sbin/a3-local-deploy-release install <clean-source-checkout>
 ```
 
 The release sync installs the auto-discoverable `lerobot_robot_a3` distribution from
-its private repository at the full commit in `uv.lock`. Before invoking sudo, the
-administrator must use a temporary forwarded SSH agent that can read that repository;
-the deployment fails closed when `SSH_AUTH_SOCK` is absent or unusable. Git access is
+its private repository at the full commit in `uv.lock`. The unique administrator keeps
+a personal account-level GitHub key on `a3-local`; its private file remains readable
+only by that administrator. The root deployment process invokes only the SSH child as
+the original `sudo` caller, with a clean environment and no agent. Git access is
 non-interactive and uses a temporary `known_hosts` file with the repository's pinned
-GitHub ED25519 host key and verified fingerprint; it never accepts an unknown key. No
-deploy key is stored on `a3-local`. The administrator develops in a personal clone,
-but real control, data collection, and policy execution use the immutable release.
-Run Python as the administrator, not root; use sudo only for drivers, udev/ACL,
-SocketCAN, and deployment administration.
+GitHub ED25519 host key and verified fingerprint; it never accepts an unknown key or
+falls back to another identity. The CI-only adapter deploy key is not stored on
+`a3-local`. The administrator develops in a personal clone, but real control, data
+collection, and policy execution use the immutable release. Run Python as the
+administrator, not root; use sudo only for drivers, udev/ACL, SocketCAN, and deployment
+administration.
 
 The source archive is moved to its final commit-scoped path before `.venv` is created,
 because virtual-environment launchers contain absolute interpreter paths and are not

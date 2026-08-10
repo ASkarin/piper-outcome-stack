@@ -6,8 +6,10 @@ deployment_root=/opt/a3-outcome-stack
 release_root=${deployment_root}/releases
 collab_group=a3-collab
 release_marker=.a3-release-complete
-forwarded_ssh_auth_sock=
+administrator=
+administrator_home=
 private_git_known_hosts=
+private_git_ssh_wrapper=
 incomplete_release_destination=
 incomplete_release_temporary=
 incomplete_release_owned=false
@@ -34,6 +36,9 @@ cleanup() {
     if [[ -n "${private_git_known_hosts}" ]]; then
         rm -f -- "${private_git_known_hosts}"
     fi
+    if [[ -n "${private_git_ssh_wrapper}" ]]; then
+        rm -f -- "${private_git_ssh_wrapper}"
+    fi
     return "${status}"
 }
 trap cleanup EXIT
@@ -45,40 +50,50 @@ git_source() {
     git -c "safe.directory=${source_root}" -C "${source_root}" "$@"
 }
 
-prepare_private_git_transport() {
+prepare_administrator_git_transport() {
+    administrator=${SUDO_USER:-}
+    [[ -n "${administrator}" && "${administrator}" != root ]] || \
+        fail "install must run through sudo from the administrator account"
+    id "${administrator}" >/dev/null 2>&1 || fail "administrator account does not exist"
+    [[ "${SUDO_UID:-}" == "$(id -u "${administrator}")" ]] || \
+        fail "sudo caller identity does not match the administrator account"
+    administrator_home=$(getent passwd "${administrator}" | cut -d: -f6)
+    [[ "${administrator_home}" == /* && "${administrator_home}" != / && \
+        -d "${administrator_home}" ]] || fail "administrator home is invalid"
+    command -v runuser >/dev/null 2>&1 || \
+        fail "runuser is required to isolate administrator Git access"
     command -v ssh-keygen >/dev/null 2>&1 || \
         fail "ssh-keygen is required to verify the private-repository host key"
     private_git_known_hosts=$(mktemp /run/a3-github-known-hosts.XXXXXX)
-    chmod 0600 "${private_git_known_hosts}"
     printf '%s\n' "${github_host_key}" >"${private_git_known_hosts}"
     ssh-keygen -lf "${private_git_known_hosts}" -E sha256 | \
         grep -F -- "${github_host_key_fingerprint}" >/dev/null || \
         fail "pinned GitHub host key fingerprint verification failed"
-}
+    chown "${administrator}":root "${private_git_known_hosts}"
+    chmod 0600 "${private_git_known_hosts}"
 
-capture_forwarded_agent() {
-    [[ -n "${SSH_AUTH_SOCK:-}" ]] || \
-        fail "install requires a forwarded SSH agent in SSH_AUTH_SOCK"
-    [[ -S "${SSH_AUTH_SOCK}" ]] || \
-        fail "SSH_AUTH_SOCK is not a usable agent socket"
-    command -v ssh-add >/dev/null 2>&1 || fail "ssh-add is required to validate the agent"
-    SSH_AUTH_SOCK="${SSH_AUTH_SOCK}" ssh-add -l >/dev/null 2>&1 || \
-        fail "forwarded SSH agent has no usable private-repository identity"
-    forwarded_ssh_auth_sock=${SSH_AUTH_SOCK}
-    unset SSH_AUTH_SOCK
-    prepare_private_git_transport
+    private_git_ssh_wrapper=$(mktemp /run/a3-git-ssh.XXXXXX)
+    {
+        printf '#!/bin/bash\n'
+        printf 'exec /usr/sbin/runuser --user %q -- /usr/bin/env -i ' "${administrator}"
+        printf 'HOME=%q USER=%q LOGNAME=%q PATH=/usr/bin:/bin ' \
+            "${administrator_home}" "${administrator}" "${administrator}"
+        printf '/usr/bin/ssh -o BatchMode=yes -o StrictHostKeyChecking=yes '
+        printf '%s ' '-o HostKeyAlgorithms=ssh-ed25519'
+        printf '%s ' "-o UserKnownHostsFile=${private_git_known_hosts}"
+        printf '%s ' '-o GlobalKnownHostsFile=/dev/null'
+        printf '%s ' '-o IdentityAgent=none' '-o IdentitiesOnly=yes'
+        printf '"$@"\n'
+    } >"${private_git_ssh_wrapper}"
+    chmod 0700 "${private_git_ssh_wrapper}"
 }
 
 private_uv() {
-    [[ -n "${forwarded_ssh_auth_sock}" ]] || fail "private dependency agent is unavailable"
+    [[ -n "${administrator}" ]] || fail "administrator Git identity is unavailable"
     [[ -f "${private_git_known_hosts}" ]] || fail "private Git host key is unavailable"
-    local git_ssh_command
-    git_ssh_command="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes"
-    git_ssh_command+=" -o HostKeyAlgorithms=ssh-ed25519"
-    git_ssh_command+=" -o UserKnownHostsFile=${private_git_known_hosts}"
-    git_ssh_command+=" -o GlobalKnownHostsFile=/dev/null -o IdentityFile=none"
-    SSH_AUTH_SOCK="${forwarded_ssh_auth_sock}" \
-        GIT_SSH_COMMAND="${git_ssh_command}" GIT_LFS_SKIP_SMUDGE=1 command uv "$@"
+    [[ -x "${private_git_ssh_wrapper}" ]] || fail "private Git SSH wrapper is unavailable"
+    GIT_SSH_COMMAND="${private_git_ssh_wrapper}" GIT_SSH_VARIANT=ssh \
+        GIT_LFS_SKIP_SMUDGE=1 command uv "$@"
 }
 
 preinstall_registry_from_mirror() {
@@ -128,7 +143,7 @@ case "${action}" in
         git_source diff --cached --quiet || fail "source index is dirty"
         [[ -z "$(git_source status --porcelain --untracked-files=all)" ]] || \
             fail "source checkout contains untracked files"
-        capture_forwarded_agent
+        prepare_administrator_git_transport
         commit=$(git_source rev-parse HEAD)
         [[ "${commit}" =~ ^[0-9a-f]{40}$ ]] || fail "source commit is invalid"
         destination=${release_root}/${commit}

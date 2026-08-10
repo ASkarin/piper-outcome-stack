@@ -85,21 +85,27 @@ def test_deployment_uses_clean_commit_scoped_immutable_environments():
     assert "--no-emit-package torchvision" in deploy
     assert "UV_DEFAULT_INDEX" in deploy
     assert "UV_HTTP_TIMEOUT=600" in deploy
-    assert "install requires a forwarded SSH agent" in deploy
-    assert '[[ -S "${SSH_AUTH_SOCK}" ]]' in deploy
-    assert "ssh-add -l" in deploy
+    assert "administrator=${SUDO_USER:-}" in deploy
+    assert '"${SUDO_UID:-}" == "$(id -u "${administrator}")"' in deploy
+    assert "runuser --user" in deploy
+    assert "/usr/bin/env -i" in deploy
+    assert "HOME=%q USER=%q LOGNAME=%q" in deploy
     assert "GIT_LFS_SKIP_SMUDGE=1" in deploy
     assert "BatchMode=yes" in deploy
     assert "StrictHostKeyChecking=yes" in deploy
     assert "HostKeyAlgorithms=ssh-ed25519" in deploy
     assert "UserKnownHostsFile=${private_git_known_hosts}" in deploy
     assert "GlobalKnownHostsFile=/dev/null" in deploy
-    assert "IdentityFile=none" in deploy
+    assert "IdentityAgent=none" in deploy
+    assert "IdentitiesOnly=yes" in deploy
     assert "mktemp /run/a3-github-known-hosts.XXXXXX" in deploy
+    assert "mktemp /run/a3-git-ssh.XXXXXX" in deploy
     assert "pinned GitHub host key fingerprint verification failed" in deploy
     assert "StrictHostKeyChecking=no" not in deploy
     assert "accept-new" not in deploy
-    assert "unset SSH_AUTH_SOCK" in deploy
+    assert "SSH_AUTH_SOCK" not in deploy
+    assert "ssh-add" not in deploy
+    assert "IdentityFile" not in deploy
     assert "--no-emit-package lerobot-robot-a3" in deploy
     assert "release already exists; releases are immutable" in deploy
     assert "incomplete_release_owned=true" in deploy

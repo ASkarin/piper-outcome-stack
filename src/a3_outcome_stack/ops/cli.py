@@ -7,10 +7,9 @@ import json
 import sys
 from typing import Any
 
-from a3_outcome_stack.robot.cli import add_robot_parser, run_robot_command
-
 from .doctor import doctor_project
 from .errors import OpsError, ValidationError
+from .robot_doctor import robot_doctor
 
 
 def _emit(value: Any) -> None:
@@ -22,15 +21,17 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     doctor = commands.add_parser("doctor")
     doctor.add_argument("--root", default=".")
-    add_robot_parser(commands)
+    robot = commands.add_parser("robot")
+    robot_actions = robot.add_subparsers(dest="robot_action", required=True)
+    robot_actions.add_parser("doctor")
     return parser
 
 
 def _run(args: argparse.Namespace) -> Any:
     if args.command == "doctor":
         return doctor_project(args.root)
-    if args.command == "robot":
-        return run_robot_command(args)
+    if args.command == "robot" and args.robot_action == "doctor":
+        return robot_doctor()
     raise ValidationError("unsupported command")
 
 
