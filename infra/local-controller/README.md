@@ -49,6 +49,12 @@ but real control, data collection, and policy execution use the immutable releas
 Run Python as the administrator, not root; use sudo only for drivers, udev/ACL,
 SocketCAN, and deployment administration.
 
+The source archive is moved to its final commit-scoped path before `.venv` is created,
+because virtual-environment launchers contain absolute interpreter paths and are not
+relocatable. Activation still occurs only after the completion marker is written. If
+installation fails before that marker, the incomplete release is moved back to its
+hidden `.installing` path for explicit recovery.
+
 `A3_PYPI_MIRROR` may point to an HTTPS package index when the locked registry CDN is
 unusable and is explicitly preserved through sudo by the command above. Git
 dependencies and pinned PyTorch wheels remain on their locked sources.

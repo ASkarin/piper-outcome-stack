@@ -66,9 +66,15 @@ def test_deployment_uses_clean_commit_scoped_immutable_environments():
     assert 'archive --format=tar "${commit}"' in deploy
     assert "rsync" not in deploy
     assert "private_uv sync" in deploy
-    assert deploy.count("--all-packages") == 3
+    assert deploy.count("--all-packages") == 2
     assert "--extra local-controller --no-dev" in deploy
-    assert deploy.count("--no-editable") == 2
+    assert deploy.count("--no-editable") == 1
+    assert 'preinstall_registry_from_mirror "${temporary}"' not in deploy
+    assert 'private_uv sync --project "${temporary}"' not in deploy
+    move_to_destination = deploy.index('mv -- "${temporary}" "${destination}"')
+    preinstall_destination = deploy.index('preinstall_registry_from_mirror "${destination}"')
+    sync_destination = deploy.index('private_uv sync --project "${destination}"')
+    assert move_to_destination < preinstall_destination < sync_destination
     assert 'private_uv sync --project "${destination}"' in deploy
     assert ".a3-release-complete" in deploy
     assert "release is incomplete" in deploy
@@ -96,6 +102,8 @@ def test_deployment_uses_clean_commit_scoped_immutable_environments():
     assert "unset SSH_AUTH_SOCK" in deploy
     assert "--no-emit-package lerobot-robot-a3" in deploy
     assert "release already exists; releases are immutable" in deploy
+    assert "incomplete_release_owned=true" in deploy
+    assert 'mv -- "${incomplete_release_destination}" "${incomplete_release_temporary}"' in deploy
     assert "chown -R root:" in deploy
     assert "mv -Tf" in deploy
 
