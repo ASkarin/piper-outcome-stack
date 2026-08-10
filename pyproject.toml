@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "a3-outcome-stack"
-version = "0.2.0"
+version = "0.2.1"
 description = "A reproducible EduLite A3 learning stack with action-outcome evaluation"
 requires-python = ">=3.12,<3.13"
 

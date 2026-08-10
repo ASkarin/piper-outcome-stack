@@ -10,7 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_canonical_namespace_has_expected_version() -> None:
-    assert a3_outcome_stack.__version__ == "0.2.0"
+    assert a3_outcome_stack.__version__ == "0.2.1"
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["project"]["version"] == a3_outcome_stack.__version__
 
 
 def test_only_canonical_package_and_cli_are_exposed() -> None:
