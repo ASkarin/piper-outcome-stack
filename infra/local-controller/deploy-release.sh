@@ -10,6 +10,7 @@ administrator=
 administrator_home=
 private_git_known_hosts=
 private_git_ssh_wrapper=
+private_git_runtime=
 incomplete_release_destination=
 incomplete_release_temporary=
 incomplete_release_owned=false
@@ -39,6 +40,11 @@ cleanup() {
     if [[ -n "${private_git_ssh_wrapper}" ]]; then
         rm -f -- "${private_git_ssh_wrapper}"
     fi
+    if [[ -n "${private_git_runtime}" && \
+        "${private_git_runtime}" =~ ^${deployment_root}/\.a3-git-transport\.[[:alnum:]]+$ && \
+        -d "${private_git_runtime}" && ! -L "${private_git_runtime}" ]]; then
+        rmdir -- "${private_git_runtime}" || true
+    fi
     return "${status}"
 }
 trap cleanup EXIT
@@ -64,7 +70,9 @@ prepare_administrator_git_transport() {
         fail "runuser is required to isolate administrator Git access"
     command -v ssh-keygen >/dev/null 2>&1 || \
         fail "ssh-keygen is required to verify the private-repository host key"
-    private_git_known_hosts=$(mktemp /run/a3-github-known-hosts.XXXXXX)
+    private_git_runtime=$(mktemp -d "${deployment_root}/.a3-git-transport.XXXXXX")
+    chmod 0711 "${private_git_runtime}"
+    private_git_known_hosts=${private_git_runtime}/known_hosts
     printf '%s\n' "${github_host_key}" >"${private_git_known_hosts}"
     ssh-keygen -lf "${private_git_known_hosts}" -E sha256 | \
         grep -F -- "${github_host_key_fingerprint}" >/dev/null || \
@@ -72,7 +80,7 @@ prepare_administrator_git_transport() {
     chown "${administrator}":root "${private_git_known_hosts}"
     chmod 0600 "${private_git_known_hosts}"
 
-    private_git_ssh_wrapper=$(mktemp /run/a3-git-ssh.XXXXXX)
+    private_git_ssh_wrapper=${private_git_runtime}/ssh
     {
         printf '#!/bin/bash\n'
         printf 'exec /usr/sbin/runuser --user %q -- /usr/bin/env -i ' "${administrator}"
