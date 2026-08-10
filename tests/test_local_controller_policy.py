@@ -98,8 +98,12 @@ def test_deployment_uses_clean_commit_scoped_immutable_environments():
     assert "GlobalKnownHostsFile=/dev/null" in deploy
     assert "IdentityAgent=none" in deploy
     assert "IdentitiesOnly=yes" in deploy
-    assert "mktemp /run/a3-github-known-hosts.XXXXXX" in deploy
-    assert "mktemp /run/a3-git-ssh.XXXXXX" in deploy
+    assert 'mktemp -d "${deployment_root}/.a3-git-transport.XXXXXX"' in deploy
+    assert 'chmod 0711 "${private_git_runtime}"' in deploy
+    assert "private_git_known_hosts=${private_git_runtime}/known_hosts" in deploy
+    assert "private_git_ssh_wrapper=${private_git_runtime}/ssh" in deploy
+    assert "mktemp /run" not in deploy
+    assert 'rmdir -- "${private_git_runtime}"' in deploy
     assert "pinned GitHub host key fingerprint verification failed" in deploy
     assert "StrictHostKeyChecking=no" not in deploy
     assert "accept-new" not in deploy

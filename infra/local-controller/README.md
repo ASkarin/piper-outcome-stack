@@ -46,7 +46,10 @@ the original `sudo` caller, with a clean environment and no agent. Git access is
 non-interactive and uses a temporary `known_hosts` file with the repository's pinned
 GitHub ED25519 host key and verified fingerprint; it never accepts an unknown key or
 falls back to another identity. The CI-only adapter deploy key is not stored on
-`a3-local`. The administrator develops in a personal clone, but real control, data
+`a3-local`. The root-only SSH wrapper lives in a transient directory under the
+deployment root because the hardened host mounts `/run` with `noexec`; the cleanup trap
+removes the wrapper and `known_hosts` file on both success and failure. The administrator
+develops in a personal clone, but real control, data
 collection, and policy execution use the immutable release. Run Python as the
 administrator, not root; use sudo only for drivers, udev/ACL, SocketCAN, and deployment
 administration.
