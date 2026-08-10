@@ -1,8 +1,12 @@
-"""Read-only local robot diagnostics; LeRobot provides operational CLIs."""
+"""Read-only local robot-host diagnostics.
+
+LeRobot and ``lerobot_robot_a3`` own actuator-facing behavior.  This module only
+reports installed dependencies, device enumeration, and the two human-role
+permission boundary used by OutcomeStack operations.
+"""
 
 from __future__ import annotations
 
-import argparse
 import importlib.metadata
 import importlib.util
 import json
@@ -11,15 +15,6 @@ import shutil
 import socket
 from pathlib import Path
 from typing import Any
-
-from a3_outcome_stack.ops.errors import ValidationError
-
-
-def add_robot_parser(commands: argparse._SubParsersAction) -> None:
-    robot = commands.add_parser("robot")
-    actions = robot.add_subparsers(dest="robot_action", required=True)
-    doctor = actions.add_parser("doctor")
-    doctor.add_argument("--root", default=".")
 
 
 def _ordinary_device_access(paths: list[Path]) -> dict[str, Any]:
@@ -139,10 +134,7 @@ def _installed_distribution(distribution_name: str) -> dict[str, Any]:
     }
 
 
-def _robot_doctor(root: str) -> dict[str, Any]:
-    root_path = Path(root).resolve()
-    if not (root_path / "configs/robot").is_dir():
-        raise ValidationError(f"missing robot configuration directory under {root_path}")
+def robot_doctor() -> dict[str, Any]:
     execution_role, groups = _execution_role()
     current_access, inventory = _target_devices()
     administrator_access = (
@@ -193,9 +185,3 @@ def _robot_doctor(root: str) -> dict[str, Any]:
         "hardware_verified": False,
         "hardware_branch": "not_executed",
     }
-
-
-def run_robot_command(args: argparse.Namespace) -> Any:
-    if args.robot_action == "doctor":
-        return _robot_doctor(args.root)
-    raise ValidationError("unsupported robot command")

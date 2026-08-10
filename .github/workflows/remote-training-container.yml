@@ -98,7 +98,7 @@ jobs:
         shell: bash
         run: |
           uv run --no-sync a3-outcome-stack doctor --root .
-          uv run --no-sync a3-outcome-stack robot doctor --root .
+          uv run --no-sync a3-outcome-stack robot doctor
           uv run --no-sync python - <<'PY'
           import importlib.metadata
           import json

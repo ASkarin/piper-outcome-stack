@@ -19,8 +19,6 @@ def test_robot_doctor_reports_local_safety_and_permission_boundary(tmp_path: Pat
             "a3_outcome_stack.ops",
             "robot",
             "doctor",
-            "--root",
-            str(root),
         ],
         cwd=root,
         env=environment,
@@ -58,3 +56,18 @@ def test_robot_doctor_reports_local_safety_and_permission_boundary(tmp_path: Pat
         access = report["roles"][role]["enumerated_device_access"]
         assert set(access) == {"can", "d435", "ar0234", "xbox"}
         assert all(item["status"] in {"pass", "fail", "not_checked"} for item in access.values())
+
+
+def test_robot_doctor_has_no_project_root_argument() -> None:
+    root = Path(__file__).parents[1]
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(root / "src")
+    completed = subprocess.run(
+        [sys.executable, "-m", "a3_outcome_stack.ops", "robot", "doctor", "--root", "."],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode == 2
+    assert "unrecognized arguments: --root" in completed.stderr

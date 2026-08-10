@@ -38,6 +38,7 @@ def test_project_doctor_accepts_complete_git_archive_release(tmp_path: Path):
     release = tmp_path / "release"
     for relative in REQUIRED_DIRECTORIES:
         (release / relative).mkdir(parents=True, exist_ok=True)
+    (release / "configs").mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "configs/project.json", release / "configs/project.json")
     shutil.copy2(ROOT / "uv.lock", release / "uv.lock")
     preregistration = "docs/preregistration/PR-20260722-01.md"

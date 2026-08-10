@@ -21,8 +21,6 @@ COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 REQUIRED_DIRECTORIES = (
     "src/a3_outcome_stack/ops",
-    "src/a3_outcome_stack/robot",
-    "configs/robot",
     "docs/preregistration",
     "tests",
     "evidence",

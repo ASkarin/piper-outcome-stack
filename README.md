@@ -54,13 +54,16 @@ axes are measured and then belongs in a separate LeRobot Teleoperator/processor.
 The adapter repository remains private until the separately documented physical gate
 passes and the owner explicitly authorizes public visibility. It is installed from a
 full Git commit; no PyPI, Hugging Face package, submodule, committed wheel, or second
-active source copy is used.
+active source copy is used. Draft calibration, safety, and hardware-gate templates have
+one source in that repository's `config/` directory. OutcomeStack does not carry a
+second template set; approved real values stay outside Git and are passed explicitly
+to `A3RobotConfig`.
 
 ## Commands and verification
 
 ```bash
 a3-outcome-stack doctor --root .
-a3-outcome-stack robot doctor --root .
+a3-outcome-stack robot doctor
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .

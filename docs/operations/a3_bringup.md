@@ -5,7 +5,7 @@ Stage 1B defaults to no hardware. Do not run a motor command from the GPU server
 ## Allowed order
 
 1. Verify `uv.lock`, installed SDK metadata, and LeRobot plugin discovery.
-2. Complete and approve versioned calibration and safety files; templates with null values cannot enable motors.
+2. Start from the draft templates in the pinned private adapter repository, then complete and approve versioned calibration and safety files; draft/null values cannot enable motors.
 3. As the unique administrator, connect the immutable release in `read_only` mode and
    record identity/status evidence; do not use sudo for the Python process.
 4. With power disabled, verify zero and direction conventions.
