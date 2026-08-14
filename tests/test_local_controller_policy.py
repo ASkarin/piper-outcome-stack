@@ -35,12 +35,17 @@ def test_no_resident_control_service_or_runtime_account():
     assert "RemainAfterExit" not in isolate_unit
 
 
-def test_bootstrap_creates_only_the_collaborator_group_and_no_placeholder_account():
+def test_bootstrap_creates_project_and_collaborator_groups_without_placeholder_account():
     bootstrap = (LOCAL / "bootstrap-host.sh").read_text(encoding="utf-8")
     manager = (LOCAL / "manage-collaborator.sh").read_text(encoding="utf-8")
-    assert "groupadd --force" in bootstrap
-    assert "piper-collab" in bootstrap
-    assert 'usermod --append --groups "${collab_group}" "${administrator}"' in bootstrap
+    assert "project_group=piper" in bootstrap
+    assert "collab_group=piper-collab" in bootstrap
+    assert 'groupadd --force "${project_group}"' in bootstrap
+    assert 'groupadd --force "${collab_group}"' in bootstrap
+    assert (
+        'usermod --append --groups "${project_group},${collab_group}" "${administrator}"'
+        in bootstrap
+    )
     assert "useradd" not in bootstrap
     assert "adduser" not in bootstrap
     assert "PIPER_TAILNET_GRANT_CONFIRMED" in manager
@@ -113,6 +118,10 @@ def test_host_doctor_requires_exact_planned_runtime_versions():
     assert "target_absent_from_host=true" in doctor
     assert "target_present_in_namespace=true" in doctor
     assert '[[ "${socketcan_status}" == pass ]] || status=incomplete' in doctor
+    assert "project_group_present" in doctor
+    assert "collaborator_group_present" in doctor
+    assert "administrator_project_group_member" in doctor
+    assert "project_group_member: $administrator_project_group_member" in doctor
     assert 'glob("can*")' not in doctor
 
 

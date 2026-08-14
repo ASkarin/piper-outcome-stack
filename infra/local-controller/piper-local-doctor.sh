@@ -21,6 +21,8 @@ uv_ok=false
 python_ok=false
 [[ "${python_version}" == "3.12.13" ]] && python_ok=true || status=incomplete
 
+project_group_present=false
+getent group piper >/dev/null && project_group_present=true || status=incomplete
 collaborator_group_present=false
 getent group piper-collab >/dev/null && collaborator_group_present=true || status=incomplete
 
@@ -198,6 +200,13 @@ administrator=${SUDO_USER:-}
 administrator_identified=false
 [[ -n "${administrator}" && "${administrator}" != "root" ]] && \
     administrator_identified=true || true
+administrator_project_group_member=false
+if [[ "${administrator_identified}" == true ]] && \
+    id -nG "${administrator}" | tr ' ' '\n' | grep -Fqx piper; then
+    administrator_project_group_member=true
+else
+    status=incomplete
+fi
 administrator_access=$(probe_access_as "${administrator}")
 collaborator=${PIPER_COLLABORATOR_ACCOUNT:-}
 collaborator_identified=false
@@ -321,6 +330,7 @@ jq -n \
     --argjson ufw_policy_ok "${ufw_policy_ok}" \
     --argjson torch "${torch_json}" \
     --argjson administrator_identified "${administrator_identified}" \
+    --argjson administrator_project_group_member "${administrator_project_group_member}" \
     --argjson administrator_access "${administrator_access}" \
     --argjson collaborator_identified "${collaborator_identified}" \
     --argjson collaborator_access "${collaborator_access}" \
@@ -330,6 +340,7 @@ jq -n \
     --argjson namespace_present "${namespace_present}" \
     --argjson target_absent_from_host "${target_absent_from_host}" \
     --argjson target_present_in_namespace "${target_present_in_namespace}" \
+    --argjson project_group_present "${project_group_present}" \
     '{
         schema_version: $schema_version,
         generated_at_utc: $generated_at_utc,
@@ -358,6 +369,7 @@ jq -n \
             },
             unique_administrator: {
                 account_identified: $administrator_identified,
+                project_group_member: $administrator_project_group_member,
                 highest_privilege: true,
                 raw_hardware_authorized: true,
                 enumerated_device_access: $administrator_access
@@ -368,6 +380,7 @@ jq -n \
                 raw_hardware_authorized: false,
                 enumerated_device_access: $collaborator_access
             },
+            project_group_present: $project_group_present,
             collaborator_group_present: $collaborator_group_present,
             deployment_root_exists: $deployment_exists
         },

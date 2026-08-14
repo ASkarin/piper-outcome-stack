@@ -4,6 +4,7 @@ export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+project_group=piper
 collab_group=piper-collab
 project_root=/opt/piper-outcome-stack
 state_root=/var/lib/piper-outcome-stack
@@ -97,8 +98,9 @@ install_base() {
         acl build-essential ca-certificates can-utils cmake curl evtest ffmpeg git \
         iproute2 jq joystick ninja-build openssl pciutils pkg-config rsync ufw \
         usbutils util-linux v4l-utils
+    groupadd --force "${project_group}"
     groupadd --force "${collab_group}"
-    usermod --append --groups "${collab_group}" "${administrator}"
+    usermod --append --groups "${project_group},${collab_group}" "${administrator}"
     install -d -m 0755 -o root -g root "${project_root}"
     install -d -m 2750 -o root -g "${collab_group}" \
         "${project_root}/releases" "${log_root}"
