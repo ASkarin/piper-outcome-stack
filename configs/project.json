@@ -1,11 +1,11 @@
 {
-  "project_id": "a3-outcome-stack",
-  "display_name": "A3 OutcomeStack",
+  "project_id": "piper-outcome-stack",
+  "display_name": "PiPER OutcomeStack",
   "schema_version": "1.0",
   "preregistration": {
-    "id": "PR-20260722-01",
-    "path": "docs/preregistration/PR-20260722-01.md",
-    "sha256": "sha256:fa5f70343c520681e10ceb8801869deeaddc4664c7383891dc31eea2d5f9e883"
+    "id": "PR-20260813-02",
+    "path": "docs/preregistration/PR-20260813-02.md",
+    "sha256": "sha256:56ec502e56f129d74ed188348461bd2313e28f2cd00fc0f410cbeeaabd815a4d"
   }
 }
 

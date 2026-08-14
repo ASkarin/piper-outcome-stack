@@ -12,8 +12,8 @@ CONTAINER = ROOT / "infra" / "container"
 LIB = CONTAINER / "lib"
 sys.path.insert(0, str(LIB))
 
-from a3_container_common import (  # noqa: E402
-    A3ContainerError,
+from piper_container_common import (  # noqa: E402
+    PiperContainerError,
     atomic_write_json,
     file_inventory,
     inventory_identity,
@@ -34,25 +34,29 @@ def test_compose_has_required_isolation() -> None:
     assert "privileged:" not in compose
     assert "ipc:" not in compose
     assert "init:" not in compose
-    assert "${A3_WORKSPACE_HOST" in compose
-    assert "${A3_SSH_HOST_KEYS_HOST" in compose
-    assert "${A3_AUTH_KEYS_HOST" in compose
-    assert "${A3_IMAGE:" in compose
-    assert "/opt/a3/container-runtime/entrypoint.sh" in compose
+    assert "${PIPER_WORKSPACE_HOST" in compose
+    assert "${PIPER_SSH_HOST_KEYS_HOST" in compose
+    assert "${PIPER_AUTH_KEYS_HOST" in compose
+    assert "${PIPER_IMAGE:" in compose
+    assert "/opt/piper/container-runtime/entrypoint.sh" in compose
     assert compose.count("create_host_path: false") == 8
 
 
 def test_dockerfile_pins_the_training_stack() -> None:
     dockerfile = (CONTAINER / "Dockerfile").read_text(encoding="utf-8")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04@sha256:" in dockerfile
+    assert (
+        "nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04@sha256:"
+        "ad6d59a3bbf3e82c1c849c9ac09cfc2a3e0bbb8655042fd899be6681b3fe2a85" in dockerfile
+    )
     assert "ghcr.io/astral-sh/uv:0.11.32@sha256:" in dockerfile
+    assert "COPY packages/lerobot_robot_outcome_piper/pyproject.toml" in dockerfile
     assert "ARG PYTHON_VERSION=3.12.13" in dockerfile
     assert '"tensorboard==2.21.0 ' in pyproject
     assert "m.version('tensorboard') == '2.21.0'" in dockerfile
     assert "--frozen" in dockerfile
     assert "--no-install-project" in dockerfile
-    assert "a3-init-shared-python" in dockerfile
+    assert "piper-init-shared-python" in dockerfile
     assert "chmod -R a-w" not in dockerfile
     assert "PYTHONNOUSERSITE" not in dockerfile
     assert "UV_LOCK_SHA256" not in dockerfile
@@ -83,31 +87,31 @@ def test_ssh_shells_load_the_mutable_shared_environment() -> None:
     assert "install_shell_startup" in entrypoint
     assert "enable_public_key_account" in entrypoint
     assert "| chpasswd" in entrypoint
-    assert '"u:${A3_ADMIN_USER}:rwx,u:${A3_COLLAB_USER}:r-x,m::rwx"' in entrypoint
-    assert "source /workspace/a3/profile.sh" in entrypoint
-    assert 'export PATH="/workspace/a3/bin:${A3_SHARED_PYTHON_ENV}/bin:${PATH}"' in profile
+    assert '"u:${PIPER_ADMIN_USER}:rwx,u:${PIPER_COLLAB_USER}:r-x,m::rwx"' in entrypoint
+    assert "source /workspace/piper/profile.sh" in entrypoint
+    assert 'export PATH="/workspace/piper/bin:${PIPER_SHARED_PYTHON_ENV}/bin:${PATH}"' in profile
     assert "unset PYTHONNOUSERSITE" in profile
-    assert 'SHARED_ENV="${A3_ROOT}/python-env"' in initializer
+    assert 'SHARED_ENV="${PIPER_ROOT}/python-env"' in initializer
     assert 'rsync -a "${SEED_ENV}/" "${temporary}/"' in initializer
     assert '"${temporary}/bin/python" -m ensurepip --upgrade' in initializer
-    assert 'chown -R "${A3_ADMIN_USER}:${A3_GROUP_NAME}"' in initializer
+    assert 'chown -R "${PIPER_ADMIN_USER}:${PIPER_GROUP_NAME}"' in initializer
     assert "g-w" in initializer
 
 
 def test_collaborator_supplementary_groups_are_reset() -> None:
     entrypoint = (CONTAINER / "entrypoint.sh").read_text(encoding="utf-8")
-    assert 'usermod --groups "${A3_GROUP_NAME}" "${A3_COLLAB_USER}"' in entrypoint
-    assert 'usermod --groups "${A3_GROUP_NAME},sudo" "${A3_ADMIN_USER}"' in entrypoint
+    assert 'usermod --groups "${PIPER_GROUP_NAME}" "${PIPER_COLLAB_USER}"' in entrypoint
+    assert 'usermod --groups "${PIPER_GROUP_NAME},sudo" "${PIPER_ADMIN_USER}"' in entrypoint
 
 
 def test_deployment_wrapper_uses_an_ordinary_image_reference() -> None:
-    wrapper = (CONTAINER / "a3-compose").read_text(encoding="utf-8")
+    wrapper = (CONTAINER / "piper-compose").read_text(encoding="utf-8")
     assert 'source "${ENV_FILE}"' in wrapper
     assert "docker compose --env-file" in wrapper
     assert 'restart "$@"' in wrapper
     assert "recreate)" in wrapper
     assert "up -d --force-recreate" in wrapper
-    assert '--user "${A3_ADMIN_USER}"' in wrapper
+    assert '--user "${PIPER_ADMIN_USER}"' in wrapper
     assert "must name an existing host directory" in wrapper
     assert "project GID must differ from both private user IDs" in wrapper
     assert "missing regular non-empty public-key file" in wrapper
@@ -115,16 +119,16 @@ def test_deployment_wrapper_uses_an_ordinary_image_reference() -> None:
 
 def test_release_area_is_root_owned_and_user_read_only() -> None:
     entrypoint = (CONTAINER / "entrypoint.sh").read_text(encoding="utf-8")
-    promote = (CONTAINER / "bin" / "a3-artifact-promote").read_text(encoding="utf-8")
-    doctor = (CONTAINER / "bin" / "a3-env-doctor").read_text(encoding="utf-8")
-    assert 'install -d -m 2750 -o root -g "${A3_GROUP_NAME}"' in entrypoint
+    promote = (CONTAINER / "bin" / "piper-artifact-promote").read_text(encoding="utf-8")
+    doctor = (CONTAINER / "bin" / "piper-env-doctor").read_text(encoding="utf-8")
+    assert 'install -d -m 2750 -o root -g "${PIPER_GROUP_NAME}"' in entrypoint
     assert "set_release_ownership(temporary, 0, group.gr_gid)" in promote
-    assert '(A3_ROOT / "releases" / "datasets", False)' in doctor
+    assert '(PIPER_ROOT / "releases" / "datasets", False)' in doctor
 
 
 def test_python_admin_command_and_gpu_runs_record_live_packages() -> None:
-    python_admin = (CONTAINER / "bin" / "a3-python").read_text(encoding="utf-8")
-    gpu_run = (CONTAINER / "bin" / "a3-gpu-run").read_text(encoding="utf-8")
+    python_admin = (CONTAINER / "bin" / "piper-python").read_text(encoding="utf-8")
+    gpu_run = (CONTAINER / "bin" / "piper-gpu-run").read_text(encoding="utf-8")
     assert "only the project administrator" in python_admin
     assert '"install", "uninstall", "list", "snapshot"' in python_admin
     assert '"resolved_packages"' in python_admin
@@ -145,11 +149,52 @@ def test_pr_container_build_has_no_registry_write_credentials() -> None:
     assert "packages: write" not in container_job
     assert "id-token: write" not in container_job
     assert "docker/build-push-action" not in container_job
+    assert "infra/container/ci/reclaim_runner_space.sh" in container_job
     assert "docker compose -f infra/container/compose.yaml config --quiet" in container_job
+    assert "docker build --file infra/container/Dockerfile" in container_job
     assert "packages: write" in publish_job
     assert "push: true" in publish_job
     assert "github.event_name == 'workflow_dispatch'" in publish_job
     assert "push:" not in workflow.split("\npermissions:", maxsplit=1)[0]
+
+
+def test_image_publication_requires_local_controller_integration() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "remote-training-container.yml").read_text(
+        encoding="utf-8"
+    )
+    publish_job = workflow.split("\n  publish:", maxsplit=1)[1]
+    assert "needs: [validate, local-controller-integration, container]" in publish_job
+
+
+def test_retired_name_scan_checks_paths_and_contents() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "remote-training-container.yml").read_text(
+        encoding="utf-8"
+    )
+    local_job = workflow.split("\n  local-controller-integration:", maxsplit=1)[1].split(
+        "\n  container:", maxsplit=1
+    )[0]
+    assert "relative = path.as_posix()" in local_job
+    assert "retired term in path" in local_job
+    assert "if term in text" in local_job
+    assert '"30da8e687a6dfc617fcd94afc367ac7071c376ce"' in local_job
+
+
+def test_local_controller_ci_verifies_retained_license_texts() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "remote-training-container.yml").read_text(
+        encoding="utf-8"
+    )
+    local_job = workflow.split("\n  local-controller-integration:", maxsplit=1)[1].split(
+        "\n  container:", maxsplit=1
+    )[0]
+    for relative in (
+        "licenses/pyAgxArm-LGPL-3.0-only.txt",
+        "licenses/GPL-3.0-only.txt",
+        "licenses/agx_arm_urdf-MIT.txt",
+        "licenses/agx_arm_ros-MIT.txt",
+    ):
+        assert f"test -s {relative}" in local_job
+    assert "f6642ce0d7872c686f29c99e9e10cd23d1d49313" in local_job
+    assert "22a9cf6c5ad2fd2e0743531936bc5dab007fa5bc" in local_job
 
 
 def test_workflow_actions_are_commit_pinned() -> None:
@@ -172,7 +217,7 @@ def test_workflow_actions_are_commit_pinned() -> None:
 )
 def test_identifier_validation(function, valid: str, invalid: str) -> None:
     assert function(valid) == valid
-    with pytest.raises(A3ContainerError):
+    with pytest.raises(PiperContainerError):
         function(invalid)
 
 
@@ -183,14 +228,14 @@ def test_runtime_config_has_no_image_identity_gate(tmp_path: Path) -> None:
         "workspace_root": "/workspace",
         "admin_user": "admin",
         "collaborator_user": "collaborator",
-        "group_name": "a3",
+        "group_name": "piper",
     }
     runtime_config.write_text(json.dumps(payload), encoding="utf-8")
     assert load_runtime_config(runtime_config) == payload
 
     del payload["group_name"]
     runtime_config.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(A3ContainerError, match="missing keys"):
+    with pytest.raises(PiperContainerError, match="missing keys"):
         load_runtime_config(runtime_config)
 
 
@@ -213,12 +258,12 @@ def test_artifact_inventory_only_skips_the_root_manifest(tmp_path: Path) -> None
     artifact = tmp_path / "artifact"
     nested = artifact / "nested"
     nested.mkdir(parents=True)
-    (artifact / "a3-artifact-manifest.json").write_text("{}\n", encoding="utf-8")
-    (nested / "a3-artifact-manifest.json").write_text("payload\n", encoding="utf-8")
+    (artifact / "piper-artifact-manifest.json").write_text("{}\n", encoding="utf-8")
+    (nested / "piper-artifact-manifest.json").write_text("payload\n", encoding="utf-8")
 
     files = file_inventory(artifact)
 
-    assert [record["path"] for record in files] == ["nested/a3-artifact-manifest.json"]
+    assert [record["path"] for record in files] == ["nested/piper-artifact-manifest.json"]
 
 
 def test_artifact_inventory_rejects_manifest_named_symlinks(tmp_path: Path) -> None:
@@ -226,13 +271,13 @@ def test_artifact_inventory_rejects_manifest_named_symlinks(tmp_path: Path) -> N
     artifact.mkdir()
     target = tmp_path / "outside"
     target.write_text("outside\n", encoding="utf-8")
-    link = artifact / "a3-artifact-manifest.json"
+    link = artifact / "piper-artifact-manifest.json"
     try:
         link.symlink_to(target)
     except OSError:
         pytest.skip("symbolic-link creation is unavailable on this platform")
 
-    with pytest.raises(A3ContainerError, match="symbolic links are forbidden"):
+    with pytest.raises(PiperContainerError, match="symbolic links are forbidden"):
         file_inventory(artifact)
 
 
@@ -243,44 +288,8 @@ def test_env_example_contains_no_real_identity() -> None:
     assert "password" not in env_example.lower()
 
 
-def test_historical_environment_evidence_remains_inspectable() -> None:
-    verification = ROOT / "evidence" / "history" / "locked-image-environment-verification.json"
-    evidence = json.loads(verification.read_text(encoding="utf-8"))
-
-    assert evidence["schema_version"] == ("a3-remote-training-environment-verification-v1")
-    assert evidence["status"] == "pass"
-    assert evidence["acceptance_complete"] is True
-    assert evidence["scope"]["training_environment_verified"] is True
-    assert evidence["scope"]["real_robot_hardware_verified"] is False
-    assert evidence["authority"]["administrator_has_final_decision"] is True
-    assert evidence["authority"]["collaborator_approval_required"] is False
-
-    access = evidence["access_and_permissions"]
-    assert access["external_ssh"]["administrator"]["status"] == "pass"
-    collaborator = access["external_ssh"]["collaborator"]
-    assert collaborator["status"] == "pass"
-    assert collaborator["evidence_source"].endswith("user_attestation_in_codex_thread")
-    assert access["external_ssh"]["root_login_rejected"] is True
-    assert access["external_ssh"]["password_only_login_rejected"] is True
-    assert access["collaborator_sudo_rejected"] is True
-    assert access["collaborator_releases_read_only"] is True
-
-    acceptance = evidence["acceptance_run"]
-    assert acceptance["status"] == "succeeded"
-    assert acceptance["exit_code"] == 0
-    assert acceptance["single_gpu_tensor_allocation"]["gpu_count"] == 3
-    assert acceptance["nccl_two_gpu"]["iterations"] == 100
-    assert acceptance["nccl_three_gpu"]["iterations"] == 100
-    assert acceptance["dataloader"]["world_size"] == 3
-    assert acceptance["dataloader"]["workers_per_rank"] == 2
-    assert len(acceptance["dataloader"]["ranks"]) == 3
-    assert all(rank["duration_seconds"] >= 600 for rank in acceptance["dataloader"]["ranks"])
-    assert acceptance["dataloader"]["shared_memory_or_bus_errors"] == 0
-    assert acceptance["logging"]["tensorboard_event_count"] >= 1
-    assert acceptance["logging"]["wandb_offline_run_count"] >= 1
-
-    assert evidence["artifact_acceptance"]["offline_load_as_collaborator"] is True
-    assert evidence["restart_persistence"]["status"] == "pass"
+def test_current_tree_does_not_carry_retired_acceptance_evidence() -> None:
+    assert list((ROOT / "evidence").rglob("*.json")) == []
 
 
 def test_json_module_is_available_for_ci_smoke() -> None:

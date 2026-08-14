@@ -1,14 +1,14 @@
-name: a3-outcome-stack
+name: piper-outcome-stack
 
 services:
   training:
-    image: "${A3_IMAGE:?set A3_IMAGE in .env}"
-    container_name: a3-outcome-stack-training
-    hostname: a3-training
+    image: "${PIPER_IMAGE:?set PIPER_IMAGE in .env}"
+    container_name: piper-outcome-stack-training
+    hostname: piper-training
     entrypoint:
       - /usr/bin/tini
       - --
-      - /opt/a3/container-runtime/entrypoint.sh
+      - /opt/piper/container-runtime/entrypoint.sh
     restart: unless-stopped
     gpus:
       - driver: nvidia
@@ -16,61 +16,61 @@ services:
     shm_size: "16gb"
     stop_grace_period: 90s
     ports:
-      - "${A3_SSH_BIND:?set A3_SSH_BIND in .env}:22"
+      - "${PIPER_SSH_BIND:?set PIPER_SSH_BIND in .env}:22"
     volumes:
       - type: bind
-        source: "${A3_WORKSPACE_HOST:?set A3_WORKSPACE_HOST in .env}"
+        source: "${PIPER_WORKSPACE_HOST:?set PIPER_WORKSPACE_HOST in .env}"
         target: /workspace
         bind:
           create_host_path: false
       - type: bind
-        source: "${A3_SSH_HOST_KEYS_HOST:?set A3_SSH_HOST_KEYS_HOST in .env}"
-        target: /etc/ssh/a3_host_keys
+        source: "${PIPER_SSH_HOST_KEYS_HOST:?set PIPER_SSH_HOST_KEYS_HOST in .env}"
+        target: /etc/ssh/piper_host_keys
         bind:
           create_host_path: false
       - type: bind
-        source: "${A3_AUTH_KEYS_HOST:?set A3_AUTH_KEYS_HOST in .env}"
-        target: /run/a3-config
+        source: "${PIPER_AUTH_KEYS_HOST:?set PIPER_AUTH_KEYS_HOST in .env}"
+        target: /run/piper-config
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         source: ./entrypoint.sh
-        target: /opt/a3/container-runtime/entrypoint.sh
+        target: /opt/piper/container-runtime/entrypoint.sh
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         source: ./init-shared-python.sh
-        target: /opt/a3/container-runtime/init-shared-python.sh
+        target: /opt/piper/container-runtime/init-shared-python.sh
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         source: ./profile.sh
-        target: /opt/a3/container-runtime/profile.sh
+        target: /opt/piper/container-runtime/profile.sh
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         source: ./bin
-        target: /opt/a3/container-runtime/bin
+        target: /opt/piper/container-runtime/bin
         read_only: true
         bind:
           create_host_path: false
       - type: bind
         source: ./lib
-        target: /opt/a3/container-runtime/lib
+        target: /opt/piper/container-runtime/lib
         read_only: true
         bind:
           create_host_path: false
     environment:
-      A3_ADMIN_USER: "${A3_ADMIN_USER:?set A3_ADMIN_USER in .env}"
-      A3_ADMIN_UID: "${A3_ADMIN_UID:?set A3_ADMIN_UID in .env}"
-      A3_COLLAB_USER: "${A3_COLLAB_USER:?set A3_COLLAB_USER in .env}"
-      A3_COLLAB_UID: "${A3_COLLAB_UID:?set A3_COLLAB_UID in .env}"
-      A3_GROUP_GID: "${A3_GROUP_GID:?set A3_GROUP_GID in .env}"
-      A3_GROUP_NAME: a3
+      PIPER_ADMIN_USER: "${PIPER_ADMIN_USER:?set PIPER_ADMIN_USER in .env}"
+      PIPER_ADMIN_UID: "${PIPER_ADMIN_UID:?set PIPER_ADMIN_UID in .env}"
+      PIPER_COLLAB_USER: "${PIPER_COLLAB_USER:?set PIPER_COLLAB_USER in .env}"
+      PIPER_COLLAB_UID: "${PIPER_COLLAB_UID:?set PIPER_COLLAB_UID in .env}"
+      PIPER_GROUP_GID: "${PIPER_GROUP_GID:?set PIPER_GROUP_GID in .env}"
+      PIPER_GROUP_NAME: piper
       HF_HUB_DISABLE_TELEMETRY: "1"
       TOKENIZERS_PARALLELISM: "false"
       TORCH_NCCL_ASYNC_ERROR_HANDLING: "1"
@@ -86,7 +86,7 @@ services:
         soft: 67108864
         hard: 67108864
     healthcheck:
-      test: ["CMD-SHELL", "/usr/sbin/sshd -t -f /run/sshd_config && test -x /workspace/a3/python-env/bin/python"]
+      test: ["CMD-SHELL", "/usr/sbin/sshd -t -f /run/sshd_config && test -x /workspace/piper/python-env/bin/python"]
       interval: 30s
       timeout: 5s
       retries: 3

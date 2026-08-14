@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_REPOSITORY: ghcr.io/askarin/a3-outcome-stack-env
+  IMAGE_REPOSITORY: ghcr.io/askarin/piper-outcome-stack-env
   UV_CONCURRENT_DOWNLOADS: 4
   UV_HTTP_RETRIES: 5
   UV_HTTP_TIMEOUT: 300
@@ -46,6 +46,18 @@ jobs:
           exit 1
       - name: Run project tests
         run: uv run --no-sync pytest
+      - name: Smoke-test LeRobot Dataset finalize, reload, and replay
+        shell: bash
+        run: |
+          acceptance_root="$(mktemp -d)"
+          uv run --no-sync python infra/acceptance/lerobot_dataset_replay_smoke.py \
+            --work-dir "${acceptance_root}/dataset-replay"
+      - name: Smoke-test ACT checkpoint and resume from step 1 to step 2
+        shell: bash
+        run: |
+          acceptance_root="$(mktemp -d)"
+          uv run --no-sync python infra/acceptance/lerobot_act_resume_smoke.py \
+            --work-dir "${acceptance_root}/act-resume"
       - name: Run Ruff lint
         run: uv run --no-sync ruff check .
       - name: Verify Ruff formatting
@@ -61,32 +73,10 @@ jobs:
         run: uv run --no-sync pytest tests/test_container_policy.py
 
   local-controller-integration:
-    name: local-controller-private-adapter
-    if: ${{ github.event_name != 'pull_request' }}
+    name: local-controller-public-locks
     runs-on: ubuntu-24.04
-    env:
-      GIT_LFS_SKIP_SMUDGE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Configure ephemeral read-only SSH access
-        shell: bash
-        env:
-          LEROBOT_A3_READ_KEY: ${{ secrets.LEROBOT_A3_READ_KEY }}
-        run: |
-          test -n "${LEROBOT_A3_READ_KEY}"
-          install -d -m 0700 "${HOME}/.ssh"
-          printf '%s\n' \
-            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
-            >"${HOME}/.ssh/known_hosts"
-          chmod 0600 "${HOME}/.ssh/known_hosts"
-          ssh-keygen -lf "${HOME}/.ssh/known_hosts" -E sha256 | \
-            grep -F 'SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU'
-          eval "$(ssh-agent -s)"
-          ssh-add - <<<"${LEROBOT_A3_READ_KEY}"
-          printf 'SSH_AUTH_SOCK=%s\nSSH_AGENT_PID=%s\n' \
-            "${SSH_AUTH_SOCK}" "${SSH_AGENT_PID}" >>"${GITHUB_ENV}"
-          printf 'GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s/.ssh/known_hosts\n' \
-            "${HOME}" >>"${GITHUB_ENV}"
       - name: Reclaim runner disk for local-controller dependencies
         run: infra/container/ci/reclaim_runner_space.sh
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -94,27 +84,100 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - name: Install locked local controller
         run: uv sync --frozen --extra local-controller --group dev
-      - name: Verify private adapter identity and project diagnostics
+      - name: Verify plugin identity and project diagnostics
         shell: bash
         run: |
-          uv run --no-sync a3-outcome-stack doctor --root .
-          uv run --no-sync a3-outcome-stack robot doctor
-          uv run --no-sync python - <<'PY'
+          uv run --no-sync piper-outcome-stack doctor --root .
+          uv run --no-sync piper-outcome-stack robot doctor
+          uv run --no-sync python - <<'PIPER_PLUGIN_IDENTITY'
           import importlib.metadata
           import json
 
-          expected = "bf188864ef3922f8caded5cc19cc43b8061c4b22"
-          distribution = importlib.metadata.distribution("lerobot_robot_a3")
-          direct_url = json.loads(distribution.read_text("direct_url.json"))
-          assert distribution.version == "0.1.0a1"
-          assert direct_url["vcs_info"]["commit_id"] == expected
-          assert importlib.metadata.version("lerobot") == "0.6.0"
-          assert importlib.metadata.version("el-a3-sdk") == "1.0.0"
-          PY
-          uv run --no-sync pytest tests/test_local_controller_policy.py tests/test_robot_doctor.py
-      - name: Stop ephemeral SSH agent
-        if: ${{ always() }}
-        run: ssh-agent -k
+          plugin = importlib.metadata.distribution("lerobot_robot_outcome_piper")
+          assert plugin.version == "0.1.0"
+          expected = {
+              "lerobot": ("0.6.0", "30da8e687a6dfc617fcd94afc367ac7071c376ce"),
+              "pyAgxArm": ("1.0.0", "799b8412fbe8b9156bc9892d3dbeb2df7e98be71"),
+          }
+          for name, (version, commit) in expected.items():
+              distribution = importlib.metadata.distribution(name)
+              assert distribution.version == version
+              direct_url = json.loads(distribution.read_text("direct_url.json"))
+              assert direct_url["vcs_info"]["commit_id"] == commit
+          PIPER_PLUGIN_IDENTITY
+          uv run --no-sync pytest tests/test_plugin.py tests/test_local_controller_policy.py tests/test_robot_doctor.py
+      - name: Install the runner's SocketCAN test module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+      - name: Verify SocketCAN namespace isolation
+        run: bash infra/local-controller/acceptance/can-namespace-smoke.sh
+      - name: Validate the no-hardware host doctor report
+        run: |
+          report="$(mktemp)"
+          bash infra/local-controller/piper-local-doctor.sh >"${report}"
+          jq -e '
+            .schema_version == "piper-local-environment-v3" and
+            .status == "incomplete" and
+            .permissions.socketcan_isolation.status == "not_checked"
+          ' "${report}"
+      - name: Verify third-party notices and retired-name scan
+        run: |
+          test -s THIRD_PARTY.md
+          test -s licenses/pyAgxArm-LGPL-3.0-only.txt
+          test -s licenses/GPL-3.0-only.txt
+          test -s licenses/agx_arm_urdf-MIT.txt
+          test -s licenses/agx_arm_ros-MIT.txt
+          grep -Fq 'f6642ce0d7872c686f29c99e9e10cd23d1d49313' THIRD_PARTY.md
+          grep -Fq '22a9cf6c5ad2fd2e0743531936bc5dab007fa5bc' THIRD_PARTY.md
+          grep -Fq 'GNU LESSER GENERAL PUBLIC LICENSE' licenses/pyAgxArm-LGPL-3.0-only.txt
+          grep -Fq 'GNU GENERAL PUBLIC LICENSE' licenses/GPL-3.0-only.txt
+          grep -Fq 'Copyright (c) 2026 aalicecc' licenses/agx_arm_urdf-MIT.txt
+          grep -Fq 'Copyright (c) 2026 aalicecc' licenses/agx_arm_ros-MIT.txt
+          python - <<'PIPER_RETIRED_NAME_SCAN'
+          import pathlib
+
+          terms = [
+              "Edu" + "Lite",
+              "Rob" + "Stride",
+              "ELA3" + "Interface",
+              "lerobot_robot_" + "a3",
+              "el-" + "a3-sdk",
+              "a3_" + "outcome_stack",
+              "a3-" + "outcome-stack",
+              "a3-" + "training",
+              "a3-" + "local",
+              "/workspace/" + "a3",
+              "LEROBOT_" + "A3",
+          ]
+          excluded = {
+              ".git",
+              ".venv",
+              ".cache",
+              ".pytest_cache",
+              ".ruff_cache",
+              "__pycache__",
+          }
+          hits = []
+          for path in pathlib.Path(".").rglob("*"):
+              if any(part in excluded for part in path.parts):
+                  continue
+              relative = path.as_posix()
+              for term in terms:
+                  if term in relative:
+                      hits.append(f"{relative}: retired term in path: {term}")
+              if not path.is_file():
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              for term in terms:
+                  if term in text:
+                      hits.append(f"{path}: {term}")
+          if hits:
+              raise SystemExit("\n".join(hits))
+          PIPER_RETIRED_NAME_SCAN
 
   container:
     name: container-build
@@ -122,27 +185,29 @@ jobs:
     needs: validate
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Reclaim runner disk for the CUDA container build
+        run: infra/container/ci/reclaim_runner_space.sh
       - name: Validate Compose rendering
         env:
-          A3_IMAGE: ghcr.io/askarin/a3-outcome-stack-env:configuration-check
-          A3_WORKSPACE_HOST: /srv/a3/workspace
-          A3_SSH_HOST_KEYS_HOST: /srv/a3/ssh-host-keys
-          A3_AUTH_KEYS_HOST: /srv/a3/authorized-keys
-          A3_SSH_BIND: 127.0.0.1:22022
-          A3_ADMIN_USER: admin
-          A3_ADMIN_UID: "20001"
-          A3_COLLAB_USER: collaborator
-          A3_COLLAB_UID: "20002"
-          A3_GROUP_GID: "20003"
+          PIPER_IMAGE: ghcr.io/askarin/piper-outcome-stack-env:configuration-check
+          PIPER_WORKSPACE_HOST: /srv/piper/workspace
+          PIPER_SSH_HOST_KEYS_HOST: /srv/piper/ssh-host-keys
+          PIPER_AUTH_KEYS_HOST: /srv/piper/authorized-keys
+          PIPER_SSH_BIND: 127.0.0.1:22022
+          PIPER_ADMIN_USER: admin
+          PIPER_ADMIN_UID: "20001"
+          PIPER_COLLAB_USER: collaborator
+          PIPER_COLLAB_UID: "20002"
+          PIPER_GROUP_GID: "20003"
         run: docker compose -f infra/container/compose.yaml config --quiet
-      - name: Confirm ordinary pull requests do not build images
-        run: echo "Container configuration is valid; image publication is manual."
+      - name: Build the locked container without publishing
+        run: docker build --file infra/container/Dockerfile --tag piper-outcome-stack-ci:${{ github.sha }} .
 
   publish:
     name: publish-image
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_image }}
     runs-on: ubuntu-24.04
-    needs: [validate, container]
+    needs: [validate, local-controller-integration, container]
     permissions:
       contents: read
       packages: write
@@ -168,8 +233,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ env.IMAGE_REPOSITORY }}:git-${{ github.sha }}
-          cache-from: type=gha,scope=a3-remote-training
-          cache-to: type=gha,mode=min,scope=a3-remote-training,timeout=5m,ignore-error=true
+          cache-from: type=gha,scope=piper-remote-training
+          cache-to: type=gha,mode=min,scope=piper-remote-training,timeout=5m,ignore-error=true
           provenance: mode=max
           sbom: true
       - name: Attest the published image

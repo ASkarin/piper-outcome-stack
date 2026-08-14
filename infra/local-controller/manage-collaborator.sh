@@ -2,9 +2,9 @@
 set -euo pipefail
 export LC_ALL=C
 
-collab_group=a3-collab
-archive_root=/var/lib/a3-outcome-stack/admin/revocations
-managed_root=/var/lib/a3-outcome-stack/admin/collaborators
+collab_group=piper-collab
+archive_root=/var/lib/piper-outcome-stack/admin/revocations
+managed_root=/var/lib/piper-outcome-stack/admin/collaborators
 
 fail() {
     echo "error: $*" >&2
@@ -20,7 +20,7 @@ case "${action}" in
     provision)
         key_file=${3:-}
         [[ $# -eq 3 ]] || fail "provision requires an account and one public-key file"
-        [[ "${A3_TAILNET_GRANT_CONFIRMED:-}" == "YES" ]] || \
+        [[ "${PIPER_TAILNET_GRANT_CONFIRMED:-}" == "YES" ]] || \
             fail "confirm the individual tailnet Grant first"
         [[ -f "${key_file}" && -s "${key_file}" ]] || fail "missing public-key file"
         [[ "$(grep -cve '^[[:space:]]*$' "${key_file}")" -eq 1 ]] || \
@@ -57,7 +57,7 @@ case "${action}" in
         chmod 0600 "${managed_root}/${account}"
         ;;
     revoke)
-        [[ "${A3_TAILNET_GRANT_REVOKED:-}" == "YES" ]] || \
+        [[ "${PIPER_TAILNET_GRANT_REVOKED:-}" == "YES" ]] || \
             fail "remove and confirm the individual tailnet Grant first"
         id "${account}" >/dev/null 2>&1 || fail "account does not exist"
         [[ -f "${managed_root}/${account}" && ! -L "${managed_root}/${account}" ]] || \

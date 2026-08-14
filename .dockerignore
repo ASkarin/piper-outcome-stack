@@ -12,5 +12,6 @@ results
 evidence
 metadata
 tests
+licenses
 infra/container/.env
 infra/container/*.local

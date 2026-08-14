@@ -15,7 +15,7 @@ mapfile -t gpu_uuids < <(
 if [[ "${1:-}" != "--locked" ]]; then
     run_id="environment-acceptance-$(date -u +%Y%m%dT%H%M%SZ)"
     gpu_csv="$(IFS=,; echo "${gpu_uuids[*]}")"
-    exec a3-gpu-run \
+    exec piper-gpu-run \
         --gpus "${gpu_csv}" \
         --run-id "${run_id}" \
         --repo "${REPO_ROOT}" \
@@ -24,15 +24,15 @@ if [[ "${1:-}" != "--locked" ]]; then
 fi
 shift
 
-[[ -n "${A3_RUN_DIR:-}" ]] || {
-    echo "--locked is reserved for a3-gpu-run" >&2
+[[ -n "${PIPER_RUN_DIR:-}" ]] || {
+    echo "--locked is reserved for piper-gpu-run" >&2
     exit 2
 }
-readonly OUTPUT_ROOT="${A3_ACCEPTANCE_OUTPUT:-${A3_RUN_DIR}/acceptance}"
+readonly OUTPUT_ROOT="${PIPER_ACCEPTANCE_OUTPUT:-${PIPER_RUN_DIR}/acceptance}"
 
 mkdir -p "${OUTPUT_ROOT}"
 
-a3-env-doctor --repo "${REPO_ROOT}" --json \
+piper-env-doctor --repo "${REPO_ROOT}" --json \
     | tee "${OUTPUT_ROOT}/environment-doctor.json"
 nvidia-smi topo -m | tee "${OUTPUT_ROOT}/gpu-topology.txt"
 numactl --hardware | tee "${OUTPUT_ROOT}/numa-topology.txt"
