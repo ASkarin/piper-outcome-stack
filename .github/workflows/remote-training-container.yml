@@ -106,6 +106,10 @@ jobs:
               assert direct_url["vcs_info"]["commit_id"] == commit
           PIPER_PLUGIN_IDENTITY
           uv run --no-sync pytest tests/test_plugin.py tests/test_local_controller_policy.py tests/test_robot_doctor.py
+      - name: Install the runner's SocketCAN test module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
       - name: Verify SocketCAN namespace isolation
         run: bash infra/local-controller/acceptance/can-namespace-smoke.sh
       - name: Validate the no-hardware host doctor report
