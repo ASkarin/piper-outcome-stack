@@ -104,6 +104,19 @@ def test_collaborator_supplementary_groups_are_reset() -> None:
     assert 'usermod --groups "${PIPER_GROUP_NAME},sudo" "${PIPER_ADMIN_USER}"' in entrypoint
 
 
+def test_collaborator_git_trust_is_only_the_exact_canonical_checkout() -> None:
+    entrypoint = (CONTAINER / "entrypoint.sh").read_text(encoding="utf-8")
+    command = (
+        'runuser --user "${PIPER_COLLAB_USER}" -- \\\n'
+        '    env HOME="${WORKSPACE_ROOT}/users/${PIPER_COLLAB_USER}" \\\n'
+        "    git config --global --replace-all \\\n"
+        '    safe.directory "${WORKSPACE_ROOT}/projects/piper-outcome-stack"'
+    )
+    assert command in entrypoint
+    assert "safe.directory '*'" not in entrypoint
+    assert 'safe.directory "*"' not in entrypoint
+
+
 def test_deployment_wrapper_uses_an_ordinary_image_reference() -> None:
     wrapper = (CONTAINER / "piper-compose").read_text(encoding="utf-8")
     assert 'source "${ENV_FILE}"' in wrapper
