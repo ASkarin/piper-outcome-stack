@@ -175,6 +175,9 @@ def test_socketcan_uses_one_explicit_namespace_and_drops_to_the_administrator():
 def test_host_security_is_public_key_only_and_has_timed_rollback():
     sshd = (LOCAL / "sshd-hardening.conf").read_text(encoding="utf-8")
     bootstrap = (LOCAL / "bootstrap-host.sh").read_text(encoding="utf-8")
+    doctor = (LOCAL / "piper-local-doctor.sh").read_text(encoding="utf-8")
+    assert "export LC_ALL=C\nexport LANGUAGE=C" in bootstrap
+    assert "export LC_ALL=C\nexport LANGUAGE=C" in doctor
     assert "PermitRootLogin no" in sshd
     assert "PasswordAuthentication no" in sshd
     assert "KbdInteractiveAuthentication no" in sshd

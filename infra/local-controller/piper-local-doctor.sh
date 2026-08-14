@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export LC_ALL=C
+export LANGUAGE=C
 
 status=pass
 hostname_ok=false
