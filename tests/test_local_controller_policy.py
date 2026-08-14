@@ -50,6 +50,12 @@ def test_bootstrap_creates_project_and_collaborator_groups_without_placeholder_a
     assert "adduser" not in bootstrap
     assert "PIPER_TAILNET_GRANT_CONFIRMED" in manager
     assert "PIPER_TAILNET_GRANT_REVOKED" in manager
+    assert "adopt)" in manager
+    assert 'fail "adopt requires one existing account"' in manager
+    assert 'fail "existing authorized_keys is unavailable"' in manager
+    assert 'fail "refusing to adopt an account with a privileged group"' in manager
+    assert 'usermod --shell /bin/bash --groups "${collab_group}" "${account}"' in manager
+    assert "adopted_at_utc" in manager
     assert "--operator" not in manager
     assert 'usermod --shell /bin/bash --groups "${collab_group}"' in manager
     assert 'usermod --groups "" --lock' in manager
@@ -84,6 +90,18 @@ def test_deployment_is_commit_scoped_accepted_and_immutable():
     assert 'TeleoperatorConfig._choice_registry.get("outcome_piper_xbox")' in deploy
     assert '"runtime_plugin_discovery": {' in deploy
     assert "runtime plugin discovery did not pass" in deploy
+    assert 'locked_uv pip freeze --python "${runtime_python}"' in deploy
+    assert '"packages": runtime_packages' in deploy
+    assert "release package list is missing or invalid" in deploy
+    assert "infra/acceptance/lerobot_dataset_replay_smoke.py" in deploy
+    dataset_acceptance = deploy.split("local dataset_replay_root", maxsplit=1)[1].split(
+        "local dataset_replay_report", maxsplit=1
+    )[0]
+    assert 'PATH="${release}/.venv/bin:/usr/bin:/bin"' in dataset_acceptance
+    assert '"${runtime_python}"' in dataset_acceptance
+    assert '"${acceptance_python}"' not in dataset_acceptance
+    assert '"dataset_round_trip": dataset_replay' in deploy
+    assert "Dataset round-trip smoke did not pass" in deploy
     assert '"kind": "ephemeral_locked_dev"' in deploy
     assert "doctor = json.loads(Path(doctor_report).read_text" in deploy
     assert 'doctor.get("source", {}).get("commit") != commit' in deploy

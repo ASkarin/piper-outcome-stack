@@ -110,7 +110,8 @@ def test_deployment_wrapper_uses_an_ordinary_image_reference() -> None:
     assert "docker compose --env-file" in wrapper
     assert 'restart "$@"' in wrapper
     assert "recreate)" in wrapper
-    assert "up -d --force-recreate" in wrapper
+    assert 'up -d --pull never "$@"' in wrapper
+    assert 'up -d --force-recreate --pull never "$@"' in wrapper
     assert '--user "${PIPER_ADMIN_USER}"' in wrapper
     assert "must name an existing host directory" in wrapper
     assert "project GID must differ from both private user IDs" in wrapper

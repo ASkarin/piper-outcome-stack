@@ -47,7 +47,9 @@ The source archive is moved to its final commit-scoped path before `.venv` is cr
 because virtual-environment launchers contain absolute interpreter paths and are not
 relocatable. Installation, acceptance, and activation are separate commands. Acceptance
 creates a temporary environment from the same frozen `uv.lock` with the development test
-group; pytest never enters the `--no-dev` runtime. Activation verifies the commit-scoped
+group; pytest never enters the `--no-dev` runtime. The hash-bound acceptance summary
+includes the complete sorted runtime package list and the synthetic Dataset
+record/finalize/reload/replay result. Activation verifies the commit-scoped
 acceptance summary, its SHA-256-bound marker, and the accepted lockfile digest. If
 installation fails before that marker, the incomplete release is moved back to its
 hidden `.installing` path for explicit recovery.
@@ -65,6 +67,14 @@ role after its individual tailnet Grant is confirmed:
 sudo PIPER_TAILNET_GRANT_CONFIRMED=YES \
   bash infra/local-controller/manage-collaborator.sh \
   provision <account> <public-key-file>
+```
+
+During the atomic cutover, adopt the already existing restricted collaborator account
+without replacing its authorized keys:
+
+```bash
+sudo PIPER_TAILNET_GRANT_CONFIRMED=YES \
+  bash infra/local-controller/manage-collaborator.sh adopt <existing-account>
 ```
 
 Revocation preserves the home directory and archives the old authorized-key file:
