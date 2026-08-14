@@ -74,6 +74,10 @@ def test_bootstrap_normalizes_managed_python_permissions_after_install():
 def test_deployment_is_commit_scoped_accepted_and_immutable():
     deploy = (LOCAL / "deploy-release.sh").read_text(encoding="utf-8")
     assert 'git -c "safe.directory=${source_root}" -C "${source_root}" "$@"' in deploy
+    assert (
+        "GIT_OPTIONAL_LOCKS=0"
+        in deploy.split("git_source()", maxsplit=1)[1].split("}", maxsplit=1)[0]
+    )
     assert "git config --global" not in deploy
     assert "git_source diff --quiet" in deploy
     assert "git_source diff --cached --quiet" in deploy

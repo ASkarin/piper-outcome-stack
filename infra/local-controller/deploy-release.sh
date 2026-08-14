@@ -43,7 +43,8 @@ trap cleanup EXIT
 action=${1:-}
 
 git_source() {
-    git -c "safe.directory=${source_root}" -C "${source_root}" "$@"
+    GIT_OPTIONAL_LOCKS=0 \
+        git -c "safe.directory=${source_root}" -C "${source_root}" "$@"
 }
 
 locked_uv() {
