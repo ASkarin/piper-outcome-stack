@@ -6,8 +6,8 @@ FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04@sha256:ad6d59a3bbf3e82c1c849c9ac
 
 ARG PYTHON_VERSION=3.12.13
 
-LABEL org.opencontainers.image.title="A3 OutcomeStack remote training environment" \
-      org.opencontainers.image.source="https://github.com/ASkarin/a3-outcome-stack"
+LABEL org.opencontainers.image.title="PiPER OutcomeStack remote training environment" \
+      org.opencontainers.image.source="https://github.com/ASkarin/piper-outcome-stack"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -15,11 +15,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     UV_LINK_MODE=copy \
-    UV_PYTHON_INSTALL_DIR=/opt/a3/python \
-    UV_PROJECT_ENVIRONMENT=/opt/a3/.venv \
+    UV_PYTHON_INSTALL_DIR=/opt/piper/python \
+    UV_PROJECT_ENVIRONMENT=/opt/piper/.venv \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH=/workspace/a3/bin:/workspace/a3/python-env/bin:/opt/a3/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/workspace/piper/bin:/workspace/piper/python-env/bin:/opt/piper/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -61,8 +61,10 @@ ENV UV_CONCURRENT_DOWNLOADS=4 \
     UV_HTTP_TIMEOUT=300 \
     UV_PYTHON_CACHE_DIR=/root/.cache/uv/python
 
-WORKDIR /opt/a3/build
+WORKDIR /opt/piper/build
 COPY pyproject.toml uv.lock .python-version ./
+COPY packages/lerobot_robot_outcome_piper/pyproject.toml \
+    packages/lerobot_robot_outcome_piper/pyproject.toml
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv python install "${PYTHON_VERSION}" \
@@ -84,28 +86,28 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         fi; \
         sleep "$((attempt * 5))"; \
     done \
-    && /opt/a3/.venv/bin/python -c \
+    && /opt/piper/.venv/bin/python -c \
         "import importlib.metadata as m; import tensorboard, torch, torchvision; assert m.version('tensorboard') == '2.21.0'; assert torch.__version__ == '2.11.0+cu128'; assert torchvision.__version__ == '0.26.0+cu128'"
 
 COPY infra/container/bin/ /usr/local/bin/
-COPY infra/container/lib/ /usr/local/lib/a3-container/
-COPY infra/container/entrypoint.sh /usr/local/sbin/a3-entrypoint
-COPY infra/container/init-shared-python.sh /usr/local/sbin/a3-init-shared-python
-COPY infra/container/profile.sh /etc/profile.d/a3.sh
-COPY infra/container/sshd_config /etc/ssh/sshd_config.a3
+COPY infra/container/lib/ /usr/local/lib/piper-container/
+COPY infra/container/entrypoint.sh /usr/local/sbin/piper-entrypoint
+COPY infra/container/init-shared-python.sh /usr/local/sbin/piper-init-shared-python
+COPY infra/container/profile.sh /etc/profile.d/piper.sh
+COPY infra/container/sshd_config /etc/ssh/sshd_config.piper
 
 RUN chmod 0755 \
-        /usr/local/bin/a3-artifact-fetch \
-        /usr/local/bin/a3-artifact-promote \
-        /usr/local/bin/a3-env-doctor \
-        /usr/local/bin/a3-gpu-run \
-        /usr/local/bin/a3-python \
-        /usr/local/sbin/a3-entrypoint \
-        /usr/local/sbin/a3-init-shared-python \
-    && chmod 0644 /etc/profile.d/a3.sh /etc/ssh/sshd_config.a3 \
+        /usr/local/bin/piper-artifact-fetch \
+        /usr/local/bin/piper-artifact-promote \
+        /usr/local/bin/piper-env-doctor \
+        /usr/local/bin/piper-gpu-run \
+        /usr/local/bin/piper-python \
+        /usr/local/sbin/piper-entrypoint \
+        /usr/local/sbin/piper-init-shared-python \
+    && chmod 0644 /etc/profile.d/piper.sh /etc/ssh/sshd_config.piper \
     && mkdir -p /run/sshd /workspace \
-    && chown -R root:root /opt/a3 /usr/local/lib/a3-container
+    && chown -R root:root /opt/piper /usr/local/lib/piper-container
 
 EXPOSE 22
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/sbin/a3-entrypoint"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/sbin/piper-entrypoint"]

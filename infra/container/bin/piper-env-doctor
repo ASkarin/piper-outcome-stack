@@ -1,0 +1,229 @@
+#!/workspace/piper/python-env/bin/python
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pwd
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+for candidate in (
+    Path("/workspace/piper/lib"),
+    Path("/usr/local/lib/piper-container"),
+    Path(__file__).resolve().parents[1] / "lib",
+):
+    if candidate.is_dir():
+        sys.path.insert(0, str(candidate))
+        break
+
+from piper_container_common import (  # noqa: E402
+    PIPER_ROOT,
+    MIN_FREE_BYTES,
+    MIN_SHM_BYTES,
+    MIRROR_ENDPOINT,
+    SHARED_PYTHON_ENV,
+    WARN_FREE_BYTES,
+    PiperContainerError,
+    free_bytes,
+    git_state,
+    gpu_inventory,
+    load_runtime_config,
+    sha256_bytes,
+    total_bytes,
+)
+
+ENDPOINTS = (
+    "https://pypi.org/simple/",
+    "https://download.pytorch.org/whl/cu128/",
+    MIRROR_ENDPOINT,
+)
+
+
+def add_check(
+    checks: list[dict[str, Any]],
+    name: str,
+    status: str,
+    detail: Any,
+) -> None:
+    checks.append({"name": name, "status": status, "detail": detail})
+
+
+def check_network(url: str) -> tuple[str, str]:
+    request = urllib.request.Request(
+        url,
+        method="HEAD",
+        headers={"User-Agent": "piper-env-doctor/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            code = response.status
+    except Exception as exc:  # Network errors have several platform-specific types.
+        return "fail", f"{type(exc).__name__}: {exc}"
+    return ("pass", f"HTTP {code}") if 200 <= code < 400 else ("fail", f"HTTP {code}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate the PiPER training container")
+    parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--skip-network", action="store_true")
+    args = parser.parse_args()
+
+    checks: list[dict[str, Any]] = []
+
+    try:
+        runtime = load_runtime_config()
+        add_check(checks, "runtime_config", "pass", runtime)
+    except PiperContainerError as exc:
+        runtime = {}
+        add_check(checks, "runtime_config", "fail", str(exc))
+
+    current_user = pwd.getpwuid(os.getuid()).pw_name
+    try:
+        executable = Path(os.path.abspath(sys.executable))
+        shared_root = Path(os.path.abspath(SHARED_PYTHON_ENV))
+        if not executable.is_file() or not shared_root.is_dir():
+            raise PiperContainerError("shared Python environment is unavailable")
+        if not executable.is_relative_to(shared_root):
+            raise PiperContainerError(
+                f"doctor is not running from the shared environment: {executable}"
+            )
+        pip_result = subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        freeze_result = subprocess.run(
+            [sys.executable, "-m", "pip", "freeze", "--all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        freeze_text = freeze_result.stdout.rstrip("\n") + "\n"
+        expected_writable = current_user == runtime.get("admin_user")
+        writable = os.access(shared_root, os.W_OK)
+        add_check(
+            checks,
+            "shared_python",
+            "pass" if writable == expected_writable else "fail",
+            {
+                "executable": str(executable),
+                "python_version": sys.version.split()[0],
+                "pip": pip_result.stdout.strip(),
+                "packages_sha256": sha256_bytes(freeze_text.encode("utf-8")),
+                "package_count": len([line for line in freeze_text.splitlines() if line.strip()]),
+                "writable": writable,
+                "expected_writable": expected_writable,
+            },
+        )
+    except (PiperContainerError, OSError, subprocess.SubprocessError) as exc:
+        add_check(checks, "shared_python", "fail", str(exc))
+
+    try:
+        state = git_state(args.repo.resolve(strict=True))
+        add_check(checks, "repository", "pass", state)
+    except (PiperContainerError, OSError) as exc:
+        add_check(checks, "repository", "fail", str(exc))
+
+    try:
+        shm_bytes = total_bytes(Path("/dev/shm"))
+        add_check(
+            checks,
+            "shared_memory",
+            "pass" if shm_bytes >= MIN_SHM_BYTES else "fail",
+            {"available_bytes": shm_bytes, "minimum_bytes": MIN_SHM_BYTES},
+        )
+    except OSError as exc:
+        add_check(checks, "shared_memory", "fail", str(exc))
+
+    try:
+        workspace_free = free_bytes(Path("/workspace"))
+        disk_status = (
+            "fail"
+            if workspace_free < MIN_FREE_BYTES
+            else "warn"
+            if workspace_free < WARN_FREE_BYTES
+            else "pass"
+        )
+        add_check(
+            checks,
+            "workspace_free",
+            disk_status,
+            {
+                "available_bytes": workspace_free,
+                "warning_bytes": WARN_FREE_BYTES,
+                "minimum_bytes": MIN_FREE_BYTES,
+            },
+        )
+    except OSError as exc:
+        add_check(checks, "workspace_free", "fail", str(exc))
+
+    try:
+        gpus = gpu_inventory()
+        add_check(checks, "gpus", "pass" if len(gpus) == 3 else "fail", gpus)
+    except PiperContainerError as exc:
+        add_check(checks, "gpus", "fail", str(exc))
+
+    allowed_users = {runtime.get("admin_user"), runtime.get("collaborator_user")}
+    add_check(
+        checks,
+        "current_user",
+        "pass" if current_user in allowed_users else "fail",
+        {"current": current_user, "allowed": sorted(user for user in allowed_users if user)},
+    )
+
+    required_directories = [
+        (PIPER_ROOT / "staging" / current_user, True),
+        (PIPER_ROOT / "runs" / current_user, True),
+        (PIPER_ROOT / "releases" / "datasets", False),
+        (PIPER_ROOT / "releases" / "models", False),
+        (PIPER_ROOT / "cache", True),
+        (PIPER_ROOT / "locks", True),
+        (
+            SHARED_PYTHON_ENV,
+            current_user == runtime.get("admin_user"),
+        ),
+        (
+            Path("/workspace/projects/piper-outcome-stack"),
+            current_user == runtime.get("admin_user"),
+        ),
+    ]
+    for directory, expected_writable in required_directories:
+        exists = directory.is_dir()
+        readable = os.access(directory, os.R_OK)
+        writable = os.access(directory, os.W_OK)
+        add_check(
+            checks,
+            f"directory:{directory}",
+            "pass" if exists and readable and writable == expected_writable else "fail",
+            {
+                "exists": exists,
+                "readable": readable,
+                "writable": writable,
+                "expected_writable": expected_writable,
+            },
+        )
+
+    if not args.skip_network:
+        for endpoint in ENDPOINTS:
+            status, detail = check_network(endpoint)
+            add_check(checks, f"network:{endpoint}", status, detail)
+
+    overall = "fail" if any(item["status"] == "fail" for item in checks) else "pass"
+    payload = {"schema_version": 1, "status": overall, "checks": checks}
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        for item in checks:
+            print(f"{item['status'].upper():4} {item['name']}: {item['detail']}")
+        print(f"OVERALL: {overall.upper()}")
+    return 0 if overall == "pass" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

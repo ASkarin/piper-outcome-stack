@@ -25,7 +25,7 @@ class SyntheticFrames(Dataset):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="A3 DataLoader shared-memory acceptance check")
+    parser = argparse.ArgumentParser(description="PiPER DataLoader shared-memory acceptance check")
     parser.add_argument("--duration-seconds", type=int, default=600)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)

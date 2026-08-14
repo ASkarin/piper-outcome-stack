@@ -1,8 +1,8 @@
 Port 22
 ListenAddress 0.0.0.0
 
-HostKey /etc/ssh/a3_host_keys/ssh_host_ed25519_key
-HostKey /etc/ssh/a3_host_keys/ssh_host_rsa_key
+HostKey /etc/ssh/piper_host_keys/ssh_host_ed25519_key
+HostKey /etc/ssh/piper_host_keys/ssh_host_rsa_key
 
 PermitRootLogin no
 PubkeyAuthentication yes

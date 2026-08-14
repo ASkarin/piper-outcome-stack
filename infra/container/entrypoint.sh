@@ -3,9 +3,9 @@ set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly WORKSPACE_ROOT="/workspace"
-readonly CONFIG_ROOT="/run/a3-config"
-readonly SSH_HOST_KEY_ROOT="/etc/ssh/a3_host_keys"
-readonly RUNTIME_CONFIG="/etc/a3/runtime.json"
+readonly CONFIG_ROOT="/run/piper-config"
+readonly SSH_HOST_KEY_ROOT="/etc/ssh/piper_host_keys"
+readonly RUNTIME_CONFIG="/etc/piper/runtime.json"
 
 if [[ -x "${SCRIPT_DIR}/init-shared-python.sh" && -d "${SCRIPT_DIR}/bin" ]]; then
     readonly PYTHON_INITIALIZER="${SCRIPT_DIR}/init-shared-python.sh"
@@ -13,14 +13,14 @@ if [[ -x "${SCRIPT_DIR}/init-shared-python.sh" && -d "${SCRIPT_DIR}/bin" ]]; the
     readonly LIB_SOURCE="${SCRIPT_DIR}/lib"
     readonly PROFILE_SOURCE="${SCRIPT_DIR}/profile.sh"
 else
-    readonly PYTHON_INITIALIZER="/usr/local/sbin/a3-init-shared-python"
+    readonly PYTHON_INITIALIZER="/usr/local/sbin/piper-init-shared-python"
     readonly COMMAND_SOURCE="/usr/local/bin"
-    readonly LIB_SOURCE="/usr/local/lib/a3-container"
-    readonly PROFILE_SOURCE="/etc/profile.d/a3.sh"
+    readonly LIB_SOURCE="/usr/local/lib/piper-container"
+    readonly PROFILE_SOURCE="/etc/profile.d/piper.sh"
 fi
 
 fail() {
-    echo "a3-entrypoint: $*" >&2
+    echo "piper-entrypoint: $*" >&2
     exit 2
 }
 
@@ -144,7 +144,7 @@ install_shell_startup() {
     local user="$1"
     local home
     local startup
-    local source_line='source /workspace/a3/profile.sh'
+    local source_line='source /workspace/piper/profile.sh'
 
     home="$(getent passwd "${user}" | cut -d: -f6)"
     for startup in "${home}/.profile" "${home}/.bashrc"; do
@@ -154,7 +154,7 @@ install_shell_startup() {
         if [[ ! -e "${startup}" ]]; then
             install -m 0644 -o "${user}" -g "${user}" /dev/null "${startup}"
         fi
-        sed -i '\|^source /etc/profile.d/a3.sh$|d' "${startup}"
+        sed -i '\|^source /etc/profile.d/piper.sh$|d' "${startup}"
         if ! grep -Fqx "${source_line}" "${startup}"; then
             printf '\n%s\n' "${source_line}" >>"${startup}"
         fi
@@ -176,109 +176,109 @@ set_write_acl() {
 }
 
 for variable in \
-    A3_ADMIN_USER \
-    A3_ADMIN_UID \
-    A3_COLLAB_USER \
-    A3_COLLAB_UID \
-    A3_GROUP_GID \
-    A3_GROUP_NAME
+    PIPER_ADMIN_USER \
+    PIPER_ADMIN_UID \
+    PIPER_COLLAB_USER \
+    PIPER_COLLAB_UID \
+    PIPER_GROUP_GID \
+    PIPER_GROUP_NAME
 do
     require_var "${variable}"
 done
 
-validate_user_name "${A3_ADMIN_USER}"
-validate_user_name "${A3_COLLAB_USER}"
-[[ "${A3_ADMIN_USER}" != "${A3_COLLAB_USER}" ]] || fail "admin and collaborator must differ"
-validate_id A3_ADMIN_UID "${A3_ADMIN_UID}"
-validate_id A3_COLLAB_UID "${A3_COLLAB_UID}"
-validate_id A3_GROUP_GID "${A3_GROUP_GID}"
+validate_user_name "${PIPER_ADMIN_USER}"
+validate_user_name "${PIPER_COLLAB_USER}"
+[[ "${PIPER_ADMIN_USER}" != "${PIPER_COLLAB_USER}" ]] || fail "admin and collaborator must differ"
+validate_id PIPER_ADMIN_UID "${PIPER_ADMIN_UID}"
+validate_id PIPER_COLLAB_UID "${PIPER_COLLAB_UID}"
+validate_id PIPER_GROUP_GID "${PIPER_GROUP_GID}"
 
-ensure_project_group "${A3_GROUP_NAME}" "${A3_GROUP_GID}"
+ensure_project_group "${PIPER_GROUP_NAME}" "${PIPER_GROUP_GID}"
 ensure_user \
-    "${A3_ADMIN_USER}" \
-    "${A3_ADMIN_UID}" \
-    "${WORKSPACE_ROOT}/users/${A3_ADMIN_USER}" \
-    "${A3_GROUP_NAME}"
+    "${PIPER_ADMIN_USER}" \
+    "${PIPER_ADMIN_UID}" \
+    "${WORKSPACE_ROOT}/users/${PIPER_ADMIN_USER}" \
+    "${PIPER_GROUP_NAME}"
 ensure_user \
-    "${A3_COLLAB_USER}" \
-    "${A3_COLLAB_UID}" \
-    "${WORKSPACE_ROOT}/users/${A3_COLLAB_USER}" \
-    "${A3_GROUP_NAME}"
+    "${PIPER_COLLAB_USER}" \
+    "${PIPER_COLLAB_UID}" \
+    "${WORKSPACE_ROOT}/users/${PIPER_COLLAB_USER}" \
+    "${PIPER_GROUP_NAME}"
 
-enable_public_key_account "${A3_ADMIN_USER}"
-enable_public_key_account "${A3_COLLAB_USER}"
+enable_public_key_account "${PIPER_ADMIN_USER}"
+enable_public_key_account "${PIPER_COLLAB_USER}"
 
-usermod --groups "${A3_GROUP_NAME},sudo" "${A3_ADMIN_USER}"
-usermod --groups "${A3_GROUP_NAME}" "${A3_COLLAB_USER}"
+usermod --groups "${PIPER_GROUP_NAME},sudo" "${PIPER_ADMIN_USER}"
+usermod --groups "${PIPER_GROUP_NAME}" "${PIPER_COLLAB_USER}"
 
 [[ -d "${WORKSPACE_ROOT}" && ! -L "${WORKSPACE_ROOT}" ]] \
     || fail "workspace mount must be a real directory: ${WORKSPACE_ROOT}"
 setfacl -m \
-    "u:${A3_ADMIN_USER}:rwx,u:${A3_COLLAB_USER}:r-x,m::rwx" \
+    "u:${PIPER_ADMIN_USER}:rwx,u:${PIPER_COLLAB_USER}:r-x,m::rwx" \
     "${WORKSPACE_ROOT}"
 
 {
     printf '%s\n' \
-        'Defaults secure_path="/workspace/a3/bin:/workspace/a3/python-env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
-    printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "${A3_ADMIN_USER}"
-} >"/etc/sudoers.d/a3-admin"
-chmod 0440 /etc/sudoers.d/a3-admin
-visudo --check --file /etc/sudoers.d/a3-admin >/dev/null
+        'Defaults secure_path="/workspace/piper/bin:/workspace/piper/python-env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+    printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "${PIPER_ADMIN_USER}"
+} >"/etc/sudoers.d/piper-admin"
+chmod 0440 /etc/sudoers.d/piper-admin
+visudo --check --file /etc/sudoers.d/piper-admin >/dev/null
 
 install_authorized_keys \
-    "${A3_ADMIN_USER}" \
+    "${PIPER_ADMIN_USER}" \
     "${CONFIG_ROOT}/admin_authorized_keys"
 install_authorized_keys \
-    "${A3_COLLAB_USER}" \
+    "${PIPER_COLLAB_USER}" \
     "${CONFIG_ROOT}/collaborator_authorized_keys"
 
-install -d -m 2750 -o "${A3_ADMIN_USER}" -g "${A3_GROUP_NAME}" \
+install -d -m 2750 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
     "${WORKSPACE_ROOT}/projects" \
-    "${WORKSPACE_ROOT}/projects/a3-outcome-stack"
+    "${WORKSPACE_ROOT}/projects/piper-outcome-stack"
 
-for user in "${A3_ADMIN_USER}" "${A3_COLLAB_USER}"; do
-    install -d -m 2750 -o "${user}" -g "${A3_GROUP_NAME}" \
-        "${WORKSPACE_ROOT}/a3/staging/${user}" \
-        "${WORKSPACE_ROOT}/a3/runs/${user}"
-    set_read_acl "${WORKSPACE_ROOT}/a3/staging/${user}"
-    set_read_acl "${WORKSPACE_ROOT}/a3/runs/${user}"
-    install -d -m 0750 -o "${user}" -g "${A3_GROUP_NAME}" \
+for user in "${PIPER_ADMIN_USER}" "${PIPER_COLLAB_USER}"; do
+    install -d -m 2750 -o "${user}" -g "${PIPER_GROUP_NAME}" \
+        "${WORKSPACE_ROOT}/piper/staging/${user}" \
+        "${WORKSPACE_ROOT}/piper/runs/${user}"
+    set_read_acl "${WORKSPACE_ROOT}/piper/staging/${user}"
+    set_read_acl "${WORKSPACE_ROOT}/piper/runs/${user}"
+    install -d -m 0750 -o "${user}" -g "${PIPER_GROUP_NAME}" \
         "${WORKSPACE_ROOT}/users/${user}/src"
 done
 
-install -d -m 2750 -o root -g "${A3_GROUP_NAME}" \
-    "${WORKSPACE_ROOT}/a3/releases" \
-    "${WORKSPACE_ROOT}/a3/releases/datasets" \
-    "${WORKSPACE_ROOT}/a3/releases/models"
-set_read_acl "${WORKSPACE_ROOT}/a3/releases"
-set_read_acl "${WORKSPACE_ROOT}/a3/releases/datasets"
-set_read_acl "${WORKSPACE_ROOT}/a3/releases/models"
+install -d -m 2750 -o root -g "${PIPER_GROUP_NAME}" \
+    "${WORKSPACE_ROOT}/piper/releases" \
+    "${WORKSPACE_ROOT}/piper/releases/datasets" \
+    "${WORKSPACE_ROOT}/piper/releases/models"
+set_read_acl "${WORKSPACE_ROOT}/piper/releases"
+set_read_acl "${WORKSPACE_ROOT}/piper/releases/datasets"
+set_read_acl "${WORKSPACE_ROOT}/piper/releases/models"
 
-install -d -m 2770 -o "${A3_ADMIN_USER}" -g "${A3_GROUP_NAME}" \
-    "${WORKSPACE_ROOT}/a3/cache" \
-    "${WORKSPACE_ROOT}/a3/cache/huggingface" \
-    "${WORKSPACE_ROOT}/a3/cache/torch" \
-    "${WORKSPACE_ROOT}/a3/locks"
-set_write_acl "${WORKSPACE_ROOT}/a3/cache"
-set_write_acl "${WORKSPACE_ROOT}/a3/cache/huggingface"
-set_write_acl "${WORKSPACE_ROOT}/a3/cache/torch"
-set_write_acl "${WORKSPACE_ROOT}/a3/locks"
+install -d -m 2770 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
+    "${WORKSPACE_ROOT}/piper/cache" \
+    "${WORKSPACE_ROOT}/piper/cache/huggingface" \
+    "${WORKSPACE_ROOT}/piper/cache/torch" \
+    "${WORKSPACE_ROOT}/piper/locks"
+set_write_acl "${WORKSPACE_ROOT}/piper/cache"
+set_write_acl "${WORKSPACE_ROOT}/piper/cache/huggingface"
+set_write_acl "${WORKSPACE_ROOT}/piper/cache/torch"
+set_write_acl "${WORKSPACE_ROOT}/piper/locks"
 
-install -d -m 0700 -o "${A3_ADMIN_USER}" -g "${A3_ADMIN_USER}" \
-    "${WORKSPACE_ROOT}/a3/admin"
+install -d -m 0700 -o "${PIPER_ADMIN_USER}" -g "${PIPER_ADMIN_USER}" \
+    "${WORKSPACE_ROOT}/piper/admin"
 
 env \
-    A3_ADMIN_USER="${A3_ADMIN_USER}" \
-    A3_GROUP_NAME="${A3_GROUP_NAME}" \
-    A3_CONTAINER_BIN_SOURCE="${COMMAND_SOURCE}" \
-    A3_CONTAINER_LIB_SOURCE="${LIB_SOURCE}" \
-    A3_PROFILE_SOURCE="${PROFILE_SOURCE}" \
+    PIPER_ADMIN_USER="${PIPER_ADMIN_USER}" \
+    PIPER_GROUP_NAME="${PIPER_GROUP_NAME}" \
+    PIPER_CONTAINER_BIN_SOURCE="${COMMAND_SOURCE}" \
+    PIPER_CONTAINER_LIB_SOURCE="${LIB_SOURCE}" \
+    PIPER_PROFILE_SOURCE="${PROFILE_SOURCE}" \
     "${PYTHON_INITIALIZER}"
-install_shell_startup "${A3_ADMIN_USER}"
-install_shell_startup "${A3_COLLAB_USER}"
+install_shell_startup "${PIPER_ADMIN_USER}"
+install_shell_startup "${PIPER_COLLAB_USER}"
 
-install -d -m 0755 /etc/a3
-/workspace/a3/python-env/bin/python - "${RUNTIME_CONFIG}" <<'PY'
+install -d -m 0755 /etc/piper
+/workspace/piper/python-env/bin/python - "${RUNTIME_CONFIG}" <<'PY'
 import json
 import os
 import pathlib
@@ -288,9 +288,9 @@ output = pathlib.Path(sys.argv[1])
 payload = {
     "schema_version": 2,
     "workspace_root": "/workspace",
-    "admin_user": os.environ["A3_ADMIN_USER"],
-    "collaborator_user": os.environ["A3_COLLAB_USER"],
-    "group_name": os.environ["A3_GROUP_NAME"],
+    "admin_user": os.environ["PIPER_ADMIN_USER"],
+    "collaborator_user": os.environ["PIPER_COLLAB_USER"],
+    "group_name": os.environ["PIPER_GROUP_NAME"],
 }
 output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 output.chmod(0o644)
@@ -306,8 +306,8 @@ fi
 chmod 0600 "${SSH_HOST_KEY_ROOT}"/ssh_host_*_key
 chmod 0644 "${SSH_HOST_KEY_ROOT}"/ssh_host_*_key.pub
 
-cp /etc/ssh/sshd_config.a3 /run/sshd_config
-printf '\nAllowUsers %s %s\n' "${A3_ADMIN_USER}" "${A3_COLLAB_USER}" >>/run/sshd_config
+cp /etc/ssh/sshd_config.piper /run/sshd_config
+printf '\nAllowUsers %s %s\n' "${PIPER_ADMIN_USER}" "${PIPER_COLLAB_USER}" >>/run/sshd_config
 mkdir -p /run/sshd
 /usr/sbin/sshd -t -f /run/sshd_config
 

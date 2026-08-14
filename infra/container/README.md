@@ -1,28 +1,28 @@
 # Remote training container
 
-This directory defines the A3 OutcomeStack training container. It provides two SSH
+This directory defines the PiPER OutcomeStack training container. It provides two SSH
 accounts, three RTX 3090 GPUs, a persistent shared Python environment, personal Git
 clones and run directories, and administrator-controlled model/dataset releases. It
 does not include camera, CAN, gamepad, ROS 2, or local-controller dependencies.
 
 ## Runtime model
 
-- `/opt/a3/.venv` is the base-image seed used only to initialize a new workspace.
-- `/workspace/a3/python-env` is the persistent shared environment used by normal
+- `/opt/piper/.venv` is the base-image seed used only to initialize a new workspace.
+- `/workspace/piper/python-env` is the persistent shared environment used by normal
   logins and formal runs.
 - The administrator owns and may modify the shared environment. The collaborator may
   read and execute it but cannot modify it.
-- `/workspace/a3/bin` contains the stable A3 commands and precedes the shared
+- `/workspace/piper/bin` contains the stable PiPER commands and precedes the shared
   environment on `PATH`.
-- `a3-python install`, `uninstall`, `list`, and `snapshot` manage the shared
+- `piper-python install`, `uninstall`, `list`, and `snapshot` manage the shared
   environment. Mutations and snapshots record the operator, resolved package list,
   timestamp, and `pip freeze --all` SHA-256 under
-  `/workspace/a3/python-env-history`.
+  `/workspace/piper/python-env-history`.
 - A missing Python package is installed in place; it does not require a container
   image build or pull request.
 
 The collaborator may create an experimental venv inside their own home. Such a venv is
-personal and is not the environment used by formal `a3-gpu-run` jobs.
+personal and is not the environment used by formal `piper-gpu-run` jobs.
 
 ## Tracked files
 
@@ -39,12 +39,12 @@ personal and is not the environment used by formal `a3-gpu-run` jobs.
 ## Administrator deployment inputs
 
 1. Copy `env.example` to `.env`.
-2. Set `A3_IMAGE` to the image reference the administrator wants Compose to use.
+2. Set `PIPER_IMAGE` to the image reference the administrator wants Compose to use.
 3. Replace every `CHANGE_ME` value and set the file mode to `0600`.
 4. Create the workspace, SSH host-key, and authorized-key host directories.
 5. Put `admin_authorized_keys` and `collaborator_authorized_keys` in the authorized-key
    directory.
-6. Run `./a3-compose config`.
+6. Run `./piper-compose config`.
 
 Real usernames, IP addresses, ports, host paths, private keys, and service tokens never
 belong in Git.
@@ -52,23 +52,24 @@ belong in Git.
 The wrapper commands have deliberately separate effects:
 
 ```bash
-./a3-compose config
-./a3-compose pull       # explicit image download
-./a3-compose up         # create/start without an automatic pull
-./a3-compose restart    # ordinary restart; no pull or recreation
-./a3-compose recreate   # explicit force-recreation
+./piper-compose config
+./piper-compose pull       # explicit image download
+./piper-compose up         # create/start without an automatic pull
+./piper-compose restart    # ordinary restart; no pull or recreation
+./piper-compose recreate   # explicit force-recreation
 ```
 
 ## Optional base-image publication
 
-Ordinary pull requests run `validate` and a lightweight Compose configuration check
-named `container-build`; they do not build a CUDA image. Merging a dependency, source,
-test, or documentation change does not publish an image.
+Ordinary pull requests run `validate`, render the Compose configuration, reclaim an
+explicit allowlist of unrelated SDKs on the disposable runner, and perform a real
+non-publishing build of the locked CUDA image in `container-build`. Merging a dependency,
+source, test, or documentation change still does not publish an image.
 
 An administrator may manually dispatch `remote-training-container` with
 `publish_image=true` to refresh the optional GHCR base image. That job still produces
 SBOM and provenance metadata, but it does not create a second deployment-approval pull
-request or deploy automatically. Updating `A3_IMAGE` and recreating the container are
+request or deploy automatically. Updating `PIPER_IMAGE` and recreating the container are
 separate administrator decisions.
 
 ## User workflow
@@ -76,33 +77,33 @@ separate administrator decisions.
 Each user keeps an independent clone:
 
 ```text
-/workspace/users/<user>/src/a3-outcome-stack
+/workspace/users/<user>/src/piper-outcome-stack
 ```
 
 Useful commands:
 
 ```bash
 python --version
-a3-python list
-a3-env-doctor --repo "$PWD" --json
+piper-python list
+piper-env-doctor --repo "$PWD" --json
 PYTHONPATH=src python -m pytest
 ```
 
 The administrator may install a package immediately:
 
 ```bash
-a3-python install <package>
-a3-python snapshot
+piper-python install <package>
+piper-python snapshot
 ```
 
 Formal GPU commands use exact GPU UUIDs:
 
 ```bash
-a3-gpu-run \
+piper-gpu-run \
   --gpus GPU-UUID-1,GPU-UUID-2 \
   --run-id EXP-EXAMPLE-A001 \
   --repo "$PWD" \
-  --dataset-manifest /workspace/a3/releases/datasets/owner--dataset@COMMIT/a3-artifact-manifest.json \
+  --dataset-manifest /workspace/piper/releases/datasets/owner--dataset@COMMIT/piper-artifact-manifest.json \
   -- \
   python train.py
 ```
@@ -117,7 +118,7 @@ Downloads use `hf-mirror.com` only inside the acquisition command and require an
 40-character revision:
 
 ```bash
-a3-artifact-fetch \
+piper-artifact-fetch \
   --repo owner/model \
   --revision 0123456789abcdef0123456789abcdef01234567 \
   --type model
@@ -126,8 +127,8 @@ a3-artifact-fetch \
 After review, only the administrator promotes the result:
 
 ```bash
-sudo a3-artifact-promote \
-  --manifest /workspace/a3/staging/<user>/models/<artifact>/a3-artifact-manifest.json
+sudo piper-artifact-promote \
+  --manifest /workspace/piper/staging/<user>/models/<artifact>/piper-artifact-manifest.json
 ```
 
 Promotion re-hashes the source and copy, refuses symlinks and overwrites, and makes the

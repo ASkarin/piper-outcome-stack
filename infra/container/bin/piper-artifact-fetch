@@ -1,0 +1,122 @@
+#!/workspace/piper/python-env/bin/python
+from __future__ import annotations
+
+import argparse
+import os
+import pwd
+import shutil
+import sys
+import uuid
+from pathlib import Path
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_HUB_OFFLINE"] = "0"
+
+for candidate in (
+    Path("/workspace/piper/lib"),
+    Path("/usr/local/lib/piper-container"),
+    Path(__file__).resolve().parents[1] / "lib",
+):
+    if candidate.is_dir():
+        sys.path.insert(0, str(candidate))
+        break
+
+from piper_container_common import (  # noqa: E402
+    PIPER_ROOT,
+    ARTIFACT_MANIFEST_NAME,
+    MIN_FREE_BYTES,
+    MIRROR_ENDPOINT,
+    WARN_FREE_BYTES,
+    PiperContainerError,
+    atomic_write_json,
+    file_inventory,
+    free_bytes,
+    inventory_identity,
+    load_runtime_config,
+    utc_now,
+    validate_repo_id,
+    validate_revision,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Fetch a commit-pinned Hugging Face artifact through hf-mirror.com"
+    )
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--revision", required=True)
+    parser.add_argument("--type", required=True, choices=("model", "dataset"))
+    args = parser.parse_args()
+
+    try:
+        repo_id = validate_repo_id(args.repo)
+        revision = validate_revision(args.revision)
+        runtime = load_runtime_config()
+        user = pwd.getpwuid(os.getuid()).pw_name
+        if user not in {runtime["admin_user"], runtime["collaborator_user"]}:
+            raise PiperContainerError(f"user {user} is not an PiPER project member")
+
+        available = free_bytes(Path("/workspace"))
+        if available < MIN_FREE_BYTES:
+            raise PiperContainerError(
+                f"download blocked: workspace free space is below {MIN_FREE_BYTES} bytes"
+            )
+        if available < WARN_FREE_BYTES:
+            print(
+                f"warning: workspace free space is below {WARN_FREE_BYTES} bytes",
+                file=sys.stderr,
+            )
+
+        parent = PIPER_ROOT / "staging" / user / f"{args.type}s"
+        parent.mkdir(parents=True, exist_ok=True)
+        artifact_name = f"{repo_id.replace('/', '--')}@{revision}"
+        destination = parent / artifact_name
+        if destination.exists():
+            raise PiperContainerError(f"artifact destination already exists: {destination}")
+        partial = parent / f".{artifact_name}.partial-{uuid.uuid4().hex}"
+
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(
+                repo_id=repo_id,
+                repo_type=args.type,
+                revision=revision,
+                local_dir=partial,
+            )
+            local_hf_cache = partial / ".cache"
+            if local_hf_cache.exists():
+                shutil.rmtree(local_hf_cache)
+            files = file_inventory(partial)
+            if not files:
+                raise PiperContainerError("downloaded artifact is empty")
+            manifest = {
+                "schema_version": 1,
+                "artifact_type": args.type,
+                "repo_id": repo_id,
+                "revision": revision,
+                "source_endpoint": MIRROR_ENDPOINT,
+                "fetched_at_utc": utc_now(),
+                "fetched_by": user,
+                "files": files,
+                "content_sha256": inventory_identity(files),
+            }
+            atomic_write_json(partial / ARTIFACT_MANIFEST_NAME, manifest)
+            partial.replace(destination)
+        except BaseException:
+            if partial.exists():
+                resolved_partial = partial.resolve(strict=False)
+                resolved_parent = parent.resolve(strict=True)
+                if resolved_partial.is_relative_to(resolved_parent):
+                    shutil.rmtree(resolved_partial)
+            raise
+
+        print(destination / ARTIFACT_MANIFEST_NAME)
+        return 0
+    except Exception as exc:
+        print(f"piper-artifact-fetch: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

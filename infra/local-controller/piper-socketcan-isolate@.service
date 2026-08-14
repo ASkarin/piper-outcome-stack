@@ -1,0 +1,6 @@
+[Unit]
+Description=Isolate verified PiPER SocketCAN interface %I
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/piper-socketcan isolate %I

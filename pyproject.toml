@@ -3,15 +3,17 @@ requires = ["setuptools>=65"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "a3-outcome-stack"
-version = "0.2.2"
-description = "A reproducible EduLite A3 learning stack with action-outcome evaluation"
+name = "piper-outcome-stack"
+version = "0.3.0"
+description = "A reproducible PiPER learning stack with action-outcome evaluation"
 requires-python = ">=3.12,<3.13"
 
 [project.optional-dependencies]
 local-controller = [
-    "lerobot_robot_a3 @ git+ssh://git@github.com/ASkarin/lerobot-robot-edulite-a3.git@bf188864ef3922f8caded5cc19cc43b8061c4b22 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "lerobot_robot_outcome_piper",
     "lerobot[core-scripts,gamepad,intelrealsense,smolvla] @ git+https://github.com/huggingface/lerobot.git@30da8e687a6dfc617fcd94afc367ac7071c376ce ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "pyAgxArm @ git+https://github.com/agilexrobotics/pyAgxArm.git@799b8412fbe8b9156bc9892d3dbeb2df7e98be71 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "scipy>=1.16,<2 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torch==2.11.0+cu128 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision==0.26.0+cu128 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
@@ -23,7 +25,10 @@ remote-training = [
 ]
 
 [project.scripts]
-a3-outcome-stack = "a3_outcome_stack.ops.cli:main"
+piper-outcome-stack = "piper_outcome_stack.ops.cli:main"
+
+[tool.uv.workspace]
+members = ["packages/lerobot_robot_outcome_piper"]
 
 [dependency-groups]
 dev = [
@@ -51,6 +56,7 @@ required-environments = [
 ]
 
 [tool.uv.sources]
+lerobot-robot-outcome-piper = { workspace = true }
 torch = [
     { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
 ]

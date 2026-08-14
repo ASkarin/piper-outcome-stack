@@ -22,11 +22,11 @@ def main() -> int:
     if os.environ.get("WANDB_MODE") != "offline":
         raise RuntimeError("WANDB_MODE must be offline during formal runs")
 
-    run_id = os.environ.get("A3_RUN_ID")
+    run_id = os.environ.get("PIPER_RUN_ID")
     if not run_id:
-        raise RuntimeError("A3_RUN_ID is not set")
+        raise RuntimeError("PIPER_RUN_ID is not set")
 
-    run_dir = required_directory("A3_RUN_DIR")
+    run_dir = required_directory("PIPER_RUN_DIR")
     tensorboard_dir = required_directory("TENSORBOARD_LOG_DIR")
     wandb_dir = required_directory("WANDB_DIR")
 
@@ -40,7 +40,7 @@ def main() -> int:
         raise RuntimeError("TensorBoard did not create an event file")
 
     run = wandb.init(
-        project="a3-outcome-stack-acceptance",
+        project="piper-outcome-stack-acceptance",
         name=run_id,
         mode="offline",
         dir=str(wandb_dir),

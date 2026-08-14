@@ -3,7 +3,7 @@ set -euo pipefail
 export LC_ALL=C
 
 backup=${1:?security backup directory is required}
-dropin=/etc/ssh/sshd_config.d/60-a3-local-hardening.conf
+dropin=/etc/ssh/sshd_config.d/60-piper-local-hardening.conf
 
 if [[ ! -d "${backup}" || ! -f "${backup}/metadata" ]]; then
     echo "invalid security backup" >&2
@@ -28,4 +28,4 @@ if [[ "${ufw_was_active}" == "yes" ]]; then
 else
     ufw --force disable
 fi
-rm -f -- /run/a3-outcome-stack/security-pending
+rm -f -- /run/piper-outcome-stack/security-pending

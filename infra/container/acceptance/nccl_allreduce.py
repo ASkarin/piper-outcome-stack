@@ -17,7 +17,7 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="A3 NCCL all-reduce acceptance check")
+    parser = argparse.ArgumentParser(description="PiPER NCCL all-reduce acceptance check")
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--tensor-mib", type=int, default=64)

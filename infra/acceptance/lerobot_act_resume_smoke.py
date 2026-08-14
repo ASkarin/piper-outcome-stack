@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,53 +15,56 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 
 def _write_dataset(root: Path) -> int:
-    joint_names = [f"L{index}" for index in range(1, 8)]
     state_names = [
-        *[f"{name}.pos" for name in joint_names],
-        *[f"{name}.vel" for name in joint_names],
+        *[f"joint_{index}.pos" for index in range(1, 7)],
+        "gripper.pos",
     ]
     features = {
         "observation.state": {
             "dtype": "float32",
-            "shape": (14,),
+            "shape": (7,),
             "names": state_names,
         },
         "observation.environment_state": {
             "dtype": "float32",
-            "shape": (14,),
+            "shape": (7,),
             "names": state_names,
         },
         "action": {
             "dtype": "float32",
             "shape": (7,),
-            "names": [f"{name}.pos" for name in joint_names],
+            "names": state_names,
         },
     }
     dataset = LeRobotDataset.create(
-        repo_id="local/a3-act-resume-smoke",
+        repo_id="local/piper-act-resume-smoke",
         fps=10,
         features=features,
         root=root,
-        robot_type="a3",
+        robot_type="outcome_piper",
         use_videos=False,
     )
     for step in range(8):
-        position = np.linspace(0.0, 0.06, 7, dtype=np.float32) + step * 0.001
-        velocity = np.full(7, 0.01, dtype=np.float32)
-        state = np.concatenate((position, velocity))
+        state = np.linspace(0.0, 0.06, 7, dtype=np.float32) + step * 0.001
         dataset.add_frame(
             {
                 "observation.state": state,
                 "observation.environment_state": state,
-                "action": position + 0.002,
+                "action": state + 0.002,
                 "task": "synthetic ACT checkpoint resume smoke",
             }
         )
     dataset.save_episode()
     dataset.finalize()
-    reloaded = LeRobotDataset(repo_id="local/a3-act-resume-smoke", root=root)
+    reloaded = LeRobotDataset(repo_id="local/piper-act-resume-smoke", root=root)
     if len(reloaded) != 8:
         raise RuntimeError(f"expected 8 dataset frames, found {len(reloaded)}")
+    if reloaded.meta.robot_type != "outcome_piper":
+        raise RuntimeError(f"unexpected reloaded robot type: {reloaded.meta.robot_type}")
+    for feature in ("observation.state", "observation.environment_state", "action"):
+        schema = reloaded.features[feature]
+        if tuple(schema["shape"]) != (7,) or tuple(schema["names"]) != tuple(state_names):
+            raise RuntimeError(f"unexpected {feature} schema: {schema}")
     return len(reloaded)
 
 
@@ -87,16 +90,14 @@ def main() -> int:
         raise FileExistsError(f"refusing to overwrite acceptance directory: {work_dir}")
     work_dir.mkdir(parents=True)
 
-    train_cli = shutil.which("lerobot-train")
-    if train_cli is None:
-        raise RuntimeError("lerobot-train is not installed in the active environment")
+    train_command = [sys.executable, "-m", "lerobot.scripts.lerobot_train"]
 
     dataset_root = work_dir / "dataset"
     output_dir = work_dir / "training"
     frame_count = _write_dataset(dataset_root)
     initial_command = [
-        train_cli,
-        "--dataset.repo_id=local/a3-act-resume-smoke",
+        *train_command,
+        "--dataset.repo_id=local/piper-act-resume-smoke",
         f"--dataset.root={dataset_root}",
         "--dataset.use_imagenet_stats=false",
         "--policy.type=act",
@@ -112,7 +113,7 @@ def main() -> int:
         "--policy.chunk_size=2",
         "--policy.n_action_steps=2",
         f"--output_dir={output_dir}",
-        "--job_name=a3-act-resume-smoke",
+        "--job_name=piper-act-resume-smoke",
         "--batch_size=2",
         "--num_workers=0",
         "--steps=1",
@@ -131,7 +132,7 @@ def main() -> int:
     if not train_config.is_file() or not optimizer_state.is_file():
         raise RuntimeError("official checkpoint is missing its config or optimizer state")
     resume_command = [
-        train_cli,
+        *train_command,
         f"--config_path={train_config}",
         "--resume=true",
         "--steps=2",
@@ -143,7 +144,7 @@ def main() -> int:
         raise RuntimeError(f"resumed checkpoint step is {resumed_step}, expected 2")
 
     summary = {
-        "schema_version": "a3-lerobot-act-resume-smoke-v1",
+        "schema_version": "piper-lerobot-act-resume-smoke-v1",
         "generated_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "status": "passed",
         "scope": {
@@ -153,9 +154,22 @@ def main() -> int:
             "device": "cpu",
         },
         "dataset": {
-            "repo_id": "local/a3-act-resume-smoke",
+            "repo_id": "local/piper-act-resume-smoke",
             "root": str(dataset_root),
+            "robot_type": "outcome_piper",
             "frames": frame_count,
+            "observation_state_names": [
+                *[f"joint_{index}.pos" for index in range(1, 7)],
+                "gripper.pos",
+            ],
+            "observation_environment_state_names": [
+                *[f"joint_{index}.pos" for index in range(1, 7)],
+                "gripper.pos",
+            ],
+            "action_names": [
+                *[f"joint_{index}.pos" for index in range(1, 7)],
+                "gripper.pos",
+            ],
             "finalized_and_reloaded": True,
         },
         "training": {

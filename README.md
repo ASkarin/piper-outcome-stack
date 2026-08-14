@@ -1,9 +1,9 @@
-# A3 OutcomeStack
+# PiPER OutcomeStack
 
-A3 OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
-evaluation, and action-outcome stack for EduLite A3. This repository is the code and
-experiment-evidence source. The control repository holds the roadmap, current status,
-decisions, and the canonical preregistration.
+PiPER OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
+evaluation, and action-outcome stack for the standard PiPER. This repository is the
+code and experiment-evidence source. The control repository holds the roadmap, current
+status, decisions, and canonical planning records.
 
 ## Conventional lifecycle
 
@@ -11,68 +11,73 @@ The project does not maintain a second experiment, dataset, checkpoint, result, 
 resume framework. Use the official LeRobot lifecycle directly:
 
 - `LeRobotDataset` v3 for recording, finalization, reload, and replay;
-- `lerobot-record`, `lerobot-teleoperate`, and `lerobot-replay` for robot workflows;
+- `piper-outcome-stack record` and `piper-outcome-stack teleoperate` for Xbox workflows,
+  delegating lifecycle management to official LeRobot while injecting the required action
+  processor; `lerobot-replay` remains the direct replay entry point;
 - `lerobot-train` for ACT/SmolVLA training and checkpoint resume;
 - Hugging Face revisions plus the promoted cross-host artifact boundary for published
   datasets and models.
 
-Historical `experiments/registry.csv`, evidence, preregistration, and Git history stay
-inspectable. SHA-256 remains at dependency/image locks, cross-host artifacts,
-calibration and safety files, preregistration, and final dataset/model publication
-boundaries. Ordinary JSON, frames, permits, checkpoint pointers, and nested result
-documents are not self-hashed.
+The experiment registry and Git history stay inspectable. SHA-256 remains at
+dependency/image locks, cross-host artifacts, safety files, preregistration, and final
+dataset/model publication boundaries.
 
-## A3 LeRobot adapter
+## PiPER LeRobot plugin
 
-The actuator-facing adapter is no longer duplicated in this repository. The
-`local-controller` extra pins the private, community-maintained third-party repository
-`ASkarin/lerobot-robot-edulite-a3` at a full commit. Its distribution remains
-`lerobot_robot_a3`, which LeRobot auto-discovers by the standard package prefix. It
-registers `A3RobotConfig` as robot type `a3` and exposes:
+The single workspace distribution `lerobot_robot_outcome_piper` is auto-discovered by
+LeRobot. It registers robot type `outcome_piper`, teleoperator type
+`outcome_piper_xbox`, and exposes one observation/action schema:
 
-- observation: `L1.pos` through `L7.pos`, `L1.vel` through `L7.vel`, plus configured
-  LeRobot cameras;
-- action: `L1.pos` through `L7.pos`;
-- direct in-process calls to the commit-pinned official `ELA3Interface`;
-- finite-value, joint-limit, fault, timing, and watchdog checks inside the adapter.
+- `joint_1.pos` through `joint_6.pos` in radians;
+- `gripper.pos` in metres, representing the official gripper's total opening width;
+- configured LeRobot cameras as additional observations.
+
+Fault codes, receive frequencies, and timestamps remain telemetry rather than policy
+state. The plugin uses only the commit-pinned official `pyAgxArm` SDK. It does not use a
+second robot backend, ROS control path, or runtime fallback.
 
 The unique highest-privilege administrator runs the plugin directly from an immutable
-release. The default `read_only` mode connects without enabling the arm. Calibration
-must already be frozen and is never performed interactively. `motion` is an explicit
-mode and additionally requires frozen safety settings, a verified physical emergency
-stop, all five hardware-gate flags, and matching calibration/safety SHA-256 bindings.
-There is no runtime account, Unix socket,
-operator permit, or mock control service. Collaborators remain unable to use raw
-devices, sudo, or modify an immutable release.
+release. The default `read_only` mode connects without enabling the arm and rejects all
+actions. `motion` additionally requires matching frozen safety and hardware-acceptance
+files bound to the exact live firmware identity. The frozen safety file also supplies
+the only motion-speed percentage and gripper force used by the SDK. Communication,
+watchdog, command, device-disconnect, and hold-to-run release faults issue the
+hardware-validated electronic emergency stop and latch the session; a new motion
+session is required after operator intervention. Disconnect does not home, reset, or
+disable the arm.
+
+There is no runtime account, Unix socket, operator permit, resident control service, or
+mock control path. Collaborators cannot enter the target real-CAN namespace, bind its
+interface, open the target camera/gamepad nodes, use sudo, or modify an immutable
+release; host-namespace `vcan` remains available for software tests.
 
 OutcomeStack continues to own camera and controller selection, data collection,
 training, evaluation, host permissions, immutable releases, and real validation
 evidence. D435 uses LeRobot's RealSense implementation; AR0234 uses OpenCV only after
-the complete module enumerates as UVC. Xbox mapping remains deferred until its real
-axes are measured and then belongs in a separate LeRobot Teleoperator/processor.
-
-The adapter repository remains private until the separately documented physical gate
-passes and the owner explicitly authorizes public visibility. It is installed from a
-full Git commit; no PyPI, Hugging Face package, submodule, committed wheel, or second
-active source copy is used. Draft calibration, safety, and hardware-gate templates have
-one source in that repository's `config/` directory. OutcomeStack does not carry a
-second template set; approved real values stay outside Git and are passed explicitly
-to `A3RobotConfig`.
+the complete module enumerates as UVC. Xbox GUID, axes, directions, trigger endpoints,
+deadzone, control rate, step limits, workspace, and safety limits have no guessed
+defaults and must be frozen after hardware acceptance.
 
 ## Commands and verification
 
 ```bash
-a3-outcome-stack doctor --root .
-a3-outcome-stack robot doctor
+piper-outcome-stack doctor --root .
+piper-outcome-stack robot doctor
+piper-outcome-stack teleoperate --robot.type=outcome_piper --teleop.type=outcome_piper_xbox ...
+piper-outcome-stack record --robot.type=outcome_piper --teleop.type=outcome_piper_xbox \
+  --dataset.push_to_hub=false ...
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
 
 The top-level doctor accepts either a Git checkout on any branch or a completed
-Git-archive release containing `.a3-release-complete`. SDK identity is established by
-the Git commit in `uv.lock` and installed distribution metadata, not a second list of
-upstream file hashes.
+Git-archive release containing `.piper-release-complete`. Dependency identities are
+established by `uv.lock` and installed distribution metadata. See `THIRD_PARTY.md` for
+the fixed upstream sources and license notices.
+
+The fixed real-CAN namespace has no veth/NAT. `record` therefore requires
+`--dataset.push_to_hub=false`; upload the finalized dataset later from the host namespace.
 
 The supported remote training environment is under `infra/container/`; the local
 controller deployment is under `infra/local-controller/`. Raw data, videos,
