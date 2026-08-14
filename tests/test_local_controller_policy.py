@@ -62,6 +62,15 @@ def test_bootstrap_creates_project_and_collaborator_groups_without_placeholder_a
     assert "authorized_keys" in manager
 
 
+def test_bootstrap_normalizes_managed_python_permissions_after_install():
+    bootstrap = (LOCAL / "bootstrap-host.sh").read_text(encoding="utf-8")
+    install_python = "UV_PYTHON_INSTALL_DIR=/opt/piper/python uv python install 3.12.13"
+    normalize_permissions = "chmod -R u=rwX,go=rX /opt/piper/python"
+    assert bootstrap.count(install_python) == 1
+    assert bootstrap.count(normalize_permissions) == 1
+    assert bootstrap.index(normalize_permissions) > bootstrap.index(install_python)
+
+
 def test_deployment_is_commit_scoped_accepted_and_immutable():
     deploy = (LOCAL / "deploy-release.sh").read_text(encoding="utf-8")
     assert 'git -c "safe.directory=${source_root}" -C "${source_root}" "$@"' in deploy

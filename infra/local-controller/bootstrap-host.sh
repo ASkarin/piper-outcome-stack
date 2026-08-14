@@ -126,6 +126,7 @@ install_base() {
     fi
     install -d -m 0755 -o root -g root /opt/piper/python
     UV_PYTHON_INSTALL_DIR=/opt/piper/python uv python install 3.12.13
+    chmod -R u=rwX,go=rX /opt/piper/python
 }
 
 install_gpu() {
