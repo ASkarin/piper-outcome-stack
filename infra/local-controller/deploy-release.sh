@@ -167,6 +167,21 @@ PIPER_RUNTIME_PLUGIN_DISCOVERY
         "${release}/tests/test_plugin.py" \
         "${release}/tests/test_local_controller_policy.py"
 
+    local dataset_replay_root=${acceptance_temporary}/dataset-replay
+    sudo -u "${administrator}" env -i \
+        HOME="${administrator_home}" \
+        PATH="${release}/.venv/bin:/usr/bin:/bin" \
+        PYTHONDONTWRITEBYTECODE=1 \
+        "${runtime_python}" \
+        "${release}/infra/acceptance/lerobot_dataset_replay_smoke.py" \
+        --work-dir "${dataset_replay_root}" >/dev/null
+    local dataset_replay_report=${dataset_replay_root}/summary.json
+    [[ -f "${dataset_replay_report}" ]] || fail "Dataset round-trip report is unavailable"
+
+    local runtime_packages=${acceptance_temporary}/runtime-packages.txt
+    locked_uv pip freeze --python "${runtime_python}" | LC_ALL=C sort >"${runtime_packages}"
+    [[ -s "${runtime_packages}" ]] || fail "release package list is empty"
+
     local lock_hash doctor_hash runtime_version uv_version
     lock_hash=$(sha256sum "${release}/uv.lock" | awk '{print $1}')
     doctor_hash=$(sha256sum "${doctor_report}" | awk '{print $1}')
@@ -180,6 +195,7 @@ PIPER_RUNTIME_PLUGIN_DISCOVERY
         fail "stale release acceptance temporary file exists"
     "${runtime_python}" - "${summary_temporary}" "${commit}" "${lock_hash}" \
         "${doctor_report}" "${doctor_hash}" "${runtime_version}" "${uv_version}" \
+        "${runtime_packages}" "${dataset_replay_report}" \
         <<'PIPER_ACCEPTANCE_SUMMARY'
 import json
 import sys
@@ -193,6 +209,8 @@ from pathlib import Path
     doctor_hash,
     runtime_version,
     uv_version,
+    runtime_packages_path,
+    dataset_replay_report,
 ) = sys.argv[1:]
 doctor = json.loads(Path(doctor_report).read_text(encoding="utf-8"))
 if doctor.get("status") != "ok" or doctor.get("source", {}).get("commit") != commit:
@@ -209,11 +227,23 @@ for name, (version, vcs_commit) in expected_dependencies.items():
         raise SystemExit(f"runtime dependency identity mismatch for {name}")
     if vcs_commit is not None and actual.get("vcs_commit") != vcs_commit:
         raise SystemExit(f"runtime dependency commit mismatch for {name}")
+runtime_packages = Path(runtime_packages_path).read_text(encoding="utf-8").splitlines()
+if not runtime_packages or runtime_packages != sorted(runtime_packages):
+    raise SystemExit("runtime package list is empty or unsorted")
+dataset_replay = json.loads(Path(dataset_replay_report).read_text(encoding="utf-8"))
+if (
+    dataset_replay.get("schema_version") != "piper-lerobot-dataset-replay-smoke-v1"
+    or dataset_replay.get("status") != "passed"
+):
+    raise SystemExit("Dataset round-trip smoke did not pass")
 summary = {
     "schema_version": "piper-release-acceptance-v1",
     "commit": commit,
     "lock": {"path": "uv.lock", "sha256": lock_hash},
-    "runtime": {"python_version": runtime_version},
+    "runtime": {
+        "python_version": runtime_version,
+        "packages": runtime_packages,
+    },
     "test_environment": {
         "kind": "ephemeral_locked_dev",
         "uv_version": uv_version,
@@ -246,6 +276,7 @@ summary = {
                 "tests/test_local_controller_policy.py",
             ],
         },
+        "dataset_round_trip": dataset_replay,
     },
 }
 Path(path).write_text(
@@ -296,6 +327,20 @@ if checks.get("runtime_plugin_discovery", {}).get("status") != "passed":
     raise SystemExit("runtime plugin discovery did not pass")
 if checks.get("pytest", {}).get("status") != "passed":
     raise SystemExit("acceptance tests did not pass")
+if (
+    checks.get("dataset_round_trip", {}).get("schema_version")
+    != "piper-lerobot-dataset-replay-smoke-v1"
+    or checks.get("dataset_round_trip", {}).get("status") != "passed"
+):
+    raise SystemExit("Dataset round-trip smoke did not pass")
+packages = summary.get("runtime", {}).get("packages")
+if (
+    not isinstance(packages, list)
+    or not packages
+    or packages != sorted(packages)
+    or any(not isinstance(package, str) or not package for package in packages)
+):
+    raise SystemExit("release package list is missing or invalid")
 print(summary.get("commit", ""))
 print(summary.get("lock", {}).get("sha256", ""))
 PIPER_VERIFY_ACCEPTANCE

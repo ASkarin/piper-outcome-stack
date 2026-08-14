@@ -119,7 +119,8 @@ case "${action}" in
     up)
         validate_runtime_inputs
         require_command docker
-        exec docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d "$@"
+        exec docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" \
+            up -d --pull never "$@"
         ;;
     restart)
         require_command docker
@@ -131,7 +132,7 @@ case "${action}" in
         exec docker compose \
             --env-file "${ENV_FILE}" \
             -f "${COMPOSE_FILE}" \
-            up -d --force-recreate "$@"
+            up -d --force-recreate --pull never "$@"
         ;;
     down | ps | logs)
         require_command docker

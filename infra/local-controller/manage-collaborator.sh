@@ -5,6 +5,7 @@ export LC_ALL=C
 collab_group=piper-collab
 archive_root=/var/lib/piper-outcome-stack/admin/revocations
 managed_root=/var/lib/piper-outcome-stack/admin/collaborators
+privileged_group_pattern='^(sudo|adm|lxd|docker|disk|dialout|input|video|render|plugdev)$'
 
 fail() {
     echo "error: $*" >&2
@@ -48,10 +49,41 @@ case "${action}" in
         install -m 0600 -o "${account}" -g "${account}" \
             "${key_file}" "${home}/.ssh/authorized_keys"
         privileged=$(id -nG "${account}" | tr ' ' '\n' | \
-            grep -E '^(sudo|adm|lxd|docker|disk|dialout|input|video|render|plugdev)$' || true)
+            grep -E "${privileged_group_pattern}" || true)
         [[ -z "${privileged}" ]] || fail "account retained a privileged group"
         install -d -m 0700 -o root -g root "${managed_root}"
         printf 'account=%s\nuid=%s\nprovisioned_at_utc=%s\n' \
+            "${account}" "${account_uid}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            >"${managed_root}/${account}"
+        chmod 0600 "${managed_root}/${account}"
+        ;;
+    adopt)
+        [[ $# -eq 2 ]] || fail "adopt requires one existing account"
+        [[ "${PIPER_TAILNET_GRANT_CONFIRMED:-}" == "YES" ]] || \
+            fail "confirm the individual tailnet Grant first"
+        getent group "${collab_group}" >/dev/null || fail "collaborator group is absent"
+        id "${account}" >/dev/null 2>&1 || fail "account does not exist"
+        account_uid=$(id -u "${account}")
+        [[ "${account_uid}" -ge 1000 ]] || fail "collaborator UID is outside the human range"
+        home=$(getent passwd "${account}" | cut -d: -f6)
+        [[ -n "${home}" && "${home}" != "/" && -d "${home}" && ! -L "${home}" ]] || \
+            fail "unsafe home directory"
+        authorized_keys=${home}/.ssh/authorized_keys
+        [[ -f "${authorized_keys}" && ! -L "${authorized_keys}" && \
+            -s "${authorized_keys}" ]] || fail "existing authorized_keys is unavailable"
+        ssh-keygen -l -f "${authorized_keys}" >/dev/null || \
+            fail "existing authorized_keys is invalid"
+        [[ ! -e "${managed_root}/${account}" && ! -L "${managed_root}/${account}" ]] || \
+            fail "account is already managed"
+        privileged=$(id -nG "${account}" | tr ' ' '\n' | \
+            grep -E "${privileged_group_pattern}" || true)
+        [[ -z "${privileged}" ]] || fail "refusing to adopt an account with a privileged group"
+        install -d -m 0700 -o root -g root "${managed_root}"
+        usermod --shell /bin/bash --groups "${collab_group}" "${account}"
+        privileged=$(id -nG "${account}" | tr ' ' '\n' | \
+            grep -E "${privileged_group_pattern}" || true)
+        [[ -z "${privileged}" ]] || fail "account retained a privileged group"
+        printf 'account=%s\nuid=%s\nadopted_at_utc=%s\n' \
             "${account}" "${account_uid}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             >"${managed_root}/${account}"
         chmod 0600 "${managed_root}/${account}"
@@ -86,6 +118,6 @@ case "${action}" in
         rm -f -- "${managed_root}/${account}"
         ;;
     *)
-        fail "usage: $0 provision <account> <public-key-file> | revoke <account>"
+        fail "usage: $0 provision <account> <public-key-file> | adopt <existing-account> | revoke <account>"
         ;;
 esac
