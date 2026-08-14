@@ -236,6 +236,11 @@ install -d -m 2750 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
     "${WORKSPACE_ROOT}/projects" \
     "${WORKSPACE_ROOT}/projects/piper-outcome-stack"
 
+runuser --user "${PIPER_COLLAB_USER}" -- \
+    env HOME="${WORKSPACE_ROOT}/users/${PIPER_COLLAB_USER}" \
+    git config --global --replace-all \
+    safe.directory "${WORKSPACE_ROOT}/projects/piper-outcome-stack"
+
 for user in "${PIPER_ADMIN_USER}" "${PIPER_COLLAB_USER}"; do
     install -d -m 2750 -o "${user}" -g "${PIPER_GROUP_NAME}" \
         "${WORKSPACE_ROOT}/piper/staging/${user}" \
