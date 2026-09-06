@@ -31,7 +31,7 @@ def test_receiver_binds_monotonic_time_to_atomic_official_parse_result():
     arm.get_fps = lambda: 200.0
     rx = FeedbackReceiver(arm, arm.gripper, lambda: clock[0])
     assert not rx.wait_ready(0)
-    for ident in rx.IDS:
+    for ident in rx.REQUIRED_IDS:
         comm.callback(
             NS(
                 arbitration_id=ident,
@@ -242,3 +242,52 @@ def test_pinned_sdk_parsers_keep_radians_and_total_gripper_metres():
     assert snap.received_s == (10.0,) * 5
     arm.get_context().comm = None
     assert arm.is_connected() is False
+
+
+def test_startup_waits_for_all_six_low_rate_driver_frames_in_each_session():
+    pytest.importorskip("pyAgxArm")
+    import can
+    from lerobot_robot_outcome_piper.sdk import create_piper
+
+    for _ in range(2):
+        arm = create_piper("unused-no-can-open", "v189")
+        gripper = arm.init_effector(arm.OPTIONS.EFFECTOR.AGX_GRIPPER)
+
+        def parse(packet):
+            arm._parser.parse_packet(packet)
+            gripper._parser.parse_packet(packet)
+
+        comm = NS(get_callback=lambda: parse, set_callback=lambda cb: None)
+        arm.get_context().comm = comm
+        # Reproduce the report: aggregate FPS can be nonzero before low-rate frames arrive.
+        arm.get_fps = lambda: 200.0
+        rx = FeedbackReceiver(arm, gripper, lambda: 10.0)
+
+        def deliver(ident):
+            rx.receive(can.Message(arbitration_id=ident, is_extended_id=False, data=bytes(8)))
+
+        try:
+            for ident in rx.IDS:
+                deliver(ident)
+            assert rx.snapshot().joints is not None
+            assert not rx.wait_ready(0)
+            for ident in (0x263, 0x264, 0x265):
+                deliver(ident)
+            assert [arm.get_driver_states(i) is None for i in range(1, 7)] == [
+                True,
+                True,
+                False,
+                False,
+                False,
+                True,
+            ]
+            assert not rx.wait_ready(0)
+            for ident in (0x261, 0x262):
+                deliver(ident)
+            assert not rx.wait_ready(0)
+            deliver(0x266)
+            assert rx.wait_ready(0)
+            assert all(arm.get_driver_states(i) is not None for i in range(1, 7))
+            assert len(rx.snapshot().received_s) == 5  # Policy timing schema is unchanged.
+        finally:
+            arm.get_context().comm = None

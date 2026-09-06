@@ -36,7 +36,8 @@ Fault codes, receive frequencies, and timestamps remain telemetry rather than po
 state. The plugin uses only the commit-pinned official `pyAgxArm` SDK. It does not use a
 second robot backend, ROS control path, or runtime fallback.
 
-The unique highest-privilege administrator runs the plugin directly from an immutable
+The administrator may debug hardware from a personal editable checkout/environment.
+Formal acceptance, formal collection and reproducible experiments use an immutable
 release. The default `read_only` mode connects without enabling the arm and rejects all
 actions. `motion` additionally requires matching frozen safety and hardware-acceptance
 files bound to the exact live firmware identity. The frozen safety file also supplies
@@ -66,6 +67,13 @@ and measured `robot.capture_timing` values.
 See [acceptance instructions](docs/operations/piper_bringup.md). Xbox GUID, axes, directions, trigger endpoints,
 deadzone, control rate, step limits, workspace, and safety limits have no guessed
 defaults and must be frozen after hardware acceptance.
+
+For daily development, run `uv sync --frozen --extra local-controller --group dev`
+once in the personal controller checkout; ordinary source edits then need only a
+debug-process restart. Run the private `.venv/bin` command through `piper-socketcan exec`
+when CAN access is needed, using the absolute path. Keep Git baseline/diff, any untracked
+source used, interpreter, command and configuration with debug output. Release only at
+stable milestones; the same hardware and motion gates apply during development.
 
 The arm and camera have arrived (user confirmation, 2026-09-06); actual hardware gates
 are tracked separately from software readiness. The read-only SDK identity probe passed;

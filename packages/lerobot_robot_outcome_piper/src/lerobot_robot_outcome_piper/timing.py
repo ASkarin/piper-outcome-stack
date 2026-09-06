@@ -35,6 +35,9 @@ class ReceivedFeedback:
 class FeedbackReceiver:
     # Official PiPER joint groups, status, and official gripper feedback.
     IDS = (0x2A5, 0x2A6, 0x2A7, 0x2A1, 0x2A8)
+    # Enable/error bits arrive separately at the lower driver-state frequency.
+    DRIVER_IDS = (0x261, 0x262, 0x263, 0x264, 0x265, 0x266)
+    REQUIRED_IDS = IDS + DRIVER_IDS
 
     def __init__(self, arm, gripper, clock: Callable[[], float]):
         self.arm, self.gripper, self.clock = arm, gripper, clock
@@ -61,7 +64,7 @@ class FeedbackReceiver:
                     raise RuntimeError("receive monotonic timestamp moved backwards or is invalid")
                 self.last_received = now
                 self.original(packet)
-                if packet.arbitration_id in self.IDS:
+                if packet.arbitration_id in self.REQUIRED_IDS:
                     if packet.is_extended_id or packet.is_error_frame or len(packet.data) != 8:
                         raise RuntimeError("malformed PiPER feedback frame")
                     self.received[packet.arbitration_id] = now
@@ -75,12 +78,12 @@ class FeedbackReceiver:
             self.condition.wait_for(
                 lambda: (
                     self.error is not None
-                    or (len(self.received) == len(self.IDS) and self.arm.get_fps() > 0)
+                    or (len(self.received) == len(self.REQUIRED_IDS) and self.arm.get_fps() > 0)
                 ),
                 timeout,
             )
             self.check_error()
-            return len(self.received) == len(self.IDS) and self.arm.get_fps() > 0
+            return len(self.received) == len(self.REQUIRED_IDS) and self.arm.get_fps() > 0
 
     def check_error(self):
         if self.error is not None:
@@ -94,7 +97,7 @@ class FeedbackReceiver:
     def snapshot(self):
         with self.condition:
             self.check_error()
-            if len(self.received) != len(self.IDS):
+            if any(key not in self.received for key in self.IDS):
                 raise RuntimeError("incomplete received feedback groups")
             frames = tuple(
                 getattr(self.arm._parser, name, None)

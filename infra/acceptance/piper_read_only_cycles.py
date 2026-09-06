@@ -1,4 +1,4 @@
-"""Five read-only LeRobot PiPER sessions, using the installed release plugin."""
+"""Five normal-plugin read-only sessions, with explicit development/acceptance provenance."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import importlib.metadata
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import asdict
@@ -13,6 +14,34 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from piper_read_only_probe import snapshot, validate_snapshot
+
+
+def runtime_provenance(root: Path, plugin_path: Path, run_kind: str) -> dict:
+    if not plugin_path.is_relative_to(root):
+        raise RuntimeError(f"plugin was imported outside the selected environment: {plugin_path}")
+    result = {"run_kind": run_kind, "plugin_source": str(plugin_path)}
+    if run_kind == "acceptance":
+        if not (root / ".piper-release-accepted").is_file():
+            raise RuntimeError("formal acceptance requires an accepted immutable release")
+        result["runtime_release"] = str(root)
+    elif run_kind == "development":
+
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(root), *args], text=True)
+
+        result["development_source"] = {
+            "root": str(root),
+            "commit": git("rev-parse", "HEAD").strip(),
+            "diff": git("diff", "HEAD", "--"),
+            # Include the actual plugin sources, including any untracked .py files.
+            "plugin_files": {
+                str(path.relative_to(root)): path.read_text(encoding="utf-8")
+                for path in sorted(plugin_path.parent.rglob("*.py"))
+            },
+        }
+    else:
+        raise ValueError("unknown read-only run kind")
+    return result
 
 
 def run_cycles(robot_factory, expected_identity, report, sample_count=30, interval_s=0.1):
@@ -84,6 +113,7 @@ def main():
     parser.add_argument("--interface", required=True)
     parser.add_argument("--identity-report", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--run-kind", choices=("acceptance", "development"), default="acceptance")
     args = parser.parse_args()
     if os.geteuid() == 0:
         parser.error("use piper-socketcan exec to run under the administrator's ordinary UID")
@@ -95,6 +125,7 @@ def main():
     report = {
         "started_at_utc": datetime.now(UTC).isoformat(),
         "status": "started",
+        "run_kind": args.run_kind,
         "interface": args.interface,
         "expected_firmware_identity": prior["firmware_identity"],
         "firmware_driver": prior["selected_driver"],
@@ -112,14 +143,9 @@ def main():
             from lerobot_robot_outcome_piper.config import OutcomePiperConfig
             from lerobot_robot_outcome_piper import robot as plugin_module
 
-            release = Path(sys.prefix).resolve().parent
+            runtime_root = Path(sys.prefix).resolve().parent
             plugin_path = Path(plugin_module.__file__).resolve()
-            if not plugin_path.is_relative_to(release):
-                raise RuntimeError(
-                    f"plugin was imported outside the selected release: {plugin_path}"
-                )
-            report["plugin_source"] = str(plugin_path)
-            report["runtime_release"] = str(release)
+            report.update(runtime_provenance(runtime_root, plugin_path, args.run_kind))
             report["dependencies"] = {}
             expected = {
                 "lerobot": "30da8e687a6dfc617fcd94afc367ac7071c376ce",

@@ -99,3 +99,41 @@ def test_failure_stops_without_retry_and_disconnects(monkeypatch, fault):
     assert len(robots) == len(report["cycles"]) == 1
     assert robots[0].disconnect_count == 1
     assert report["cycles"][0]["status"] == "failed"
+
+
+def test_development_run_records_dirty_and_untracked_plugin_sources(tmp_path):
+    import subprocess
+
+    root = tmp_path / "development"
+    root.mkdir()
+    plugin = root / "plugin"
+    plugin.mkdir()
+    source = plugin / "robot.py"
+    source.write_text("original = True\n")
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+    git("init", "--quiet")
+    git("add", "plugin/robot.py")
+    git(
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+    )
+    source.write_text("original = False\n")
+    (plugin / "untracked.py").write_text("helper = True\n")
+    result = cycles.runtime_provenance(root, source, "development")
+    assert result["run_kind"] == "development"
+    assert "runtime_release" not in result
+    assert "+original = False" in result["development_source"]["diff"]
+    assert result["development_source"]["plugin_files"]["plugin/untracked.py"] == "helper = True\n"
+    with pytest.raises(RuntimeError, match="accepted immutable release"):
+        cycles.runtime_provenance(root, source, "acceptance")
+    with pytest.raises(RuntimeError, match="outside"):
+        cycles.runtime_provenance(root, tmp_path / "other.py", "development")

@@ -20,7 +20,7 @@ the current on-site checks and outstanding software work.
 2. Identify the independent physical emergency stop and its effect. The teach button
    can start recording/playback; it and the host application's stop button do not
    establish an independent physical stop. Do not test them by starting a trajectory.
-3. Verify the candidate commit, locks, plugin discovery, and immutable release. The
+3. For formal acceptance, verify the candidate commit, locks, plugin discovery, and immutable release. The
    release must include the single-camera contract and pass its own acceptance;
    an earlier release's acceptance marker does not validate the updated code.
 4. Isolate the inspected real CAN interface while DOWN using `piper-socketcan` in the
@@ -30,11 +30,17 @@ the current on-site checks and outstanding software work.
 
 ## Read-only, stopping, then motion
 
-5. After the administrator authorizes real CAN bring-up, use the immutable release in
+5. For formal five-cycle acceptance, after the administrator authorizes real CAN bring-up, use the immutable release in
    `read_only` for five connect/read/disconnect cycles. It sends firmware queries but
    does not enable, home, reset, or change motion mode. Record actual motor-enable
    status separately: the software name `CONNECTED_DISABLED` is not proof that the
    arm was disabled before connection. Verify units, feedback groups, and freshness.
+
+   Daily administrator debugging may instead use a personal editable checkout and its
+   private `.venv`, through the same `piper-socketcan exec` launcher. Preserve the Git
+   baseline/diff, untracked source used, command, interpreter and configuration with debug
+   output. Source-only changes need a process restart, not a release; these debug runs do
+   not replace the formal five-cycle evidence. All device and motion gates still apply.
 6. Perform the manufacturer's approved, mechanically supported stop acceptance in
    a separate on-site administrator task. Official electronic emergency stop allows
    damped descent; disable/reset can lose support immediately. An in-process watchdog
