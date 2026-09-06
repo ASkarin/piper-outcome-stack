@@ -98,7 +98,7 @@ else
 fi
 
 can_not_checked='{"status":"not_checked","interface":"","expected_access":null,"bind_succeeded":null,"error":null,"effective_uid":null,"effective_capabilities_zero":null}'
-not_checked_access='{"can":{"status":"not_checked","interface":"","expected_access":null,"bind_succeeded":null,"error":null,"effective_uid":null,"effective_capabilities_zero":null},"d435":{"status":"not_checked","devices":[]},"ar0234":{"status":"not_checked","devices":[]},"xbox":{"status":"not_checked","devices":[]}}'
+not_checked_access='{"can":{"status":"not_checked","interface":"","expected_access":null,"bind_succeeded":null,"error":null,"effective_uid":null,"effective_capabilities_zero":null},"d435":{"status":"not_checked","devices":[]},"xbox":{"status":"not_checked","devices":[]}}'
 
 probe_access_as() {
     local account=$1
@@ -114,33 +114,14 @@ probe_access_as() {
         printf '%s\n' "${not_checked_access}"
         return
     }
-    sudo -u "${account}" env PIPER_AR0234_DEVICE="${PIPER_AR0234_DEVICE:-}" \
+    sudo -u "${account}" env PIPER_D435_SERIAL="${PIPER_D435_SERIAL:-}" \
         "${deployment_python}" - <<'PIPER_DEVICE_ACCESS_PROBE'
 import json
-import os
-from pathlib import Path
+from piper_outcome_stack.ops.robot_doctor import _target_devices
 
-def ordinary(paths):
-    if not paths:
-        return {"status": "not_checked", "devices": []}
-    devices = [
-        {"path": str(path), "readable": os.access(path, os.R_OK), "writable": os.access(path, os.W_OK)}
-        for path in paths
-    ]
-    return {
-        "status": "pass" if all(item["readable"] and item["writable"] for item in devices) else "fail",
-        "devices": devices,
-    }
-
-video_root = Path("/dev/v4l/by-id")
-videos = sorted(video_root.iterdir()) if video_root.is_dir() else []
-d435 = [path for path in videos if "realsense" in path.name.lower() or "d435" in path.name.lower()]
-ar0234 = [path for path in videos if "ar0234" in path.name.lower()]
-if os.environ.get("PIPER_AR0234_DEVICE"):
-    ar0234.append(Path(os.environ["PIPER_AR0234_DEVICE"]))
-input_root = Path("/dev/input/by-id")
-xbox = sorted(input_root.glob("*-event-joystick")) if input_root.is_dir() else []
-print(json.dumps({"d435": ordinary(d435), "ar0234": ordinary(ar0234), "xbox": ordinary(xbox)}, sort_keys=True))
+access, _ = _target_devices()
+access.pop("can")
+print(json.dumps(access, sort_keys=True))
 PIPER_DEVICE_ACCESS_PROBE
 }
 

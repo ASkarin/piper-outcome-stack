@@ -30,7 +30,7 @@ LeRobot. It registers robot type `outcome_piper`, teleoperator type
 
 - `joint_1.pos` through `joint_6.pos` in radians;
 - `gripper.pos` in metres, representing the official gripper's total opening width;
-- configured LeRobot cameras as additional observations.
+- one D435 RGB observation named `d435` (`observation.images.d435` in the Dataset).
 
 Fault codes, receive frequencies, and timestamps remain telemetry rather than policy
 state. The plugin uses only the commit-pinned official `pyAgxArm` SDK. It does not use a
@@ -53,10 +53,18 @@ release; host-namespace `vcan` remains available for software tests.
 
 OutcomeStack continues to own camera and controller selection, data collection,
 training, evaluation, host permissions, immutable releases, and real validation
-evidence. D435 uses LeRobot's RealSense implementation; AR0234 uses OpenCV only after
-the complete module enumerates as UVC. Xbox GUID, axes, directions, trigger endpoints,
+evidence. The single D435 uses LeRobot's RealSense implementation, its inspected numeric
+serial, and explicit RGB resolution/fps. Depth is inspected and calibrated separately;
+the first ACT/SmolVLA/outcome-model input uses RGB and the seven state values. Robot-only
+bring-up may omit the camera; recording requires it and matching camera/Dataset/Xbox fps.
+See [acceptance instructions](docs/operations/piper_bringup.md). Xbox GUID, axes, directions, trigger endpoints,
 deadzone, control rate, step limits, workspace, and safety limits have no guessed
 defaults and must be frozen after hardware acceptance.
+
+The arm and camera have arrived (user confirmation, 2026-09-06); actual hardware gates
+remain unverified. Mode-feedback confirmation and persisted image/state/action timing remain acceptance blockers as
+described in the bring-up instructions. Run the doctor with the inspected
+`PIPER_D435_SERIAL`; both video and USB nodes require permission verification.
 
 ## Commands and verification
 

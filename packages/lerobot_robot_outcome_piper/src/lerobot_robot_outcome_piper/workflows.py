@@ -114,6 +114,10 @@ def record(cfg: Any) -> Any:
             "record inside piper-can requires dataset.push_to_hub=false; "
             "publish after the hardware session"
         )
+    if set(robot_config.cameras) != {"d435"}:
+        raise ValueError("record requires the single d435 RGB camera")
+    if robot_config.cameras["d435"].fps != cfg.dataset.fps:
+        raise ValueError("dataset fps must match the verified d435 fps")
     with motion_input_safety_scope():
         return official.record(
             cfg,

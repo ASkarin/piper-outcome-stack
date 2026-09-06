@@ -96,10 +96,7 @@ class OutcomePiper(Robot):
     def observation_features(self) -> dict[str, type | tuple[int, ...]]:
         features: dict[str, type | tuple[int, ...]] = dict.fromkeys(ACTION_KEYS, float)
         for name, camera in self.config.cameras.items():
-            if getattr(camera, "use_rgb", True):
-                features[name] = (camera.height, camera.width, 3)
-            if getattr(camera, "use_depth", False):
-                features[f"{name}_depth"] = (camera.height, camera.width, 1)
+            features[name] = (camera.height, camera.width, 3)
         return features
 
     @cached_property
@@ -498,10 +495,7 @@ class OutcomePiper(Robot):
             }
             try:
                 for name, camera in self.cameras.items():
-                    if getattr(self.config.cameras[name], "use_rgb", True):
-                        observation[name] = camera.async_read()
-                    if getattr(self.config.cameras[name], "use_depth", False):
-                        observation[f"{name}_depth"] = camera.async_read_depth()
+                    observation[name] = camera.async_read()
             except Exception as exc:
                 self._latch(PiperState.FAULT, exc)
             return observation

@@ -86,7 +86,7 @@ sudo PIPER_TAILNET_GRANT_REVOKED=YES \
 
 ## Deferred device rules
 
-Until exact hardware arrives, real CAN, D435, AR0234, and Xbox access remains
+Until the delivered hardware passes acceptance, real CAN, one D435 and Xbox access remains
 `not_checked`. Do not prefill an interface, bitrate, device node, or udev match.
 
 SocketCAN is a network interface, so Unix device groups and udev node ACLs cannot keep
@@ -120,10 +120,14 @@ CAN rule. Verify an unplug/replug: the oneshot must move the interface while it 
 exit, and leave it absent from the host namespace. Until that exact rule and hotplug test
 pass, every reboot/re-enumeration resets the permission result to `not_checked`, and the
 administrator must manually isolate and rerun the positive/negative doctor before CAN
-use. Device groups or exact udev ACLs remain appropriate only for the D435, AR0234, and
+use. Device groups or exact udev ACLs remain appropriate only for the D435 and
 Xbox nodes. Device access does not authorize motion: the five hardware and action flags
 remain false until the physical safety gates have machine evidence.
 
 The namespace has no veth/NAT. Real `record` sessions must pass
 `--dataset.push_to_hub=false`; upload the finalized dataset afterwards from the host
 namespace.
+
+The single D435 is bound by inspected serial using `PIPER_D435_SERIAL` for doctor.
+Verify both its video nodes and USB device node; enumeration is not an actual
+RealSense-open or role-permission acceptance. See `docs/operations/piper_bringup.md`.

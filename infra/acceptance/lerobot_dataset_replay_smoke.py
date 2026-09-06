@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
@@ -23,6 +24,8 @@ ACTION_NAMES = (
     *[f"joint_{index}.pos" for index in range(1, 7)],
     "gripper.pos",
 )
+IMAGE_KEY = "observation.images.d435"
+IMAGE_SHAPE = (32, 48, 3)  # Synthetic transport fixture, not a hardware stream profile.
 
 
 @dataclass(kw_only=True)
@@ -42,7 +45,7 @@ class FakeRobot(Robot):
     name = "outcome_piper"
 
     def __init__(self) -> None:
-        self.cameras = {}
+        self.cameras = {"d435": object()}
         self._connected = False
         self._observation_count = 0
         self.connect_count = 0
@@ -50,8 +53,8 @@ class FakeRobot(Robot):
         self.actions: list[dict[str, float]] = []
 
     @property
-    def observation_features(self) -> dict[str, type]:
-        return dict.fromkeys(ACTION_NAMES, float)
+    def observation_features(self) -> dict[str, type | tuple[int, ...]]:
+        return {**dict.fromkeys(ACTION_NAMES, float), "d435": IMAGE_SHAPE}
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -78,12 +81,12 @@ class FakeRobot(Robot):
     def configure(self) -> None:
         return None
 
-    def get_observation(self) -> dict[str, float]:
+    def get_observation(self) -> dict[str, Any]:
         if not self._connected:
             raise RuntimeError("fake robot is disconnected")
         offset = self._observation_count * 0.001
         self._observation_count += 1
-        return {
+        state = {
             name: float(value + offset)
             for name, value in zip(
                 ACTION_NAMES,
@@ -91,6 +94,7 @@ class FakeRobot(Robot):
                 strict=True,
             )
         }
+        return {**state, "d435": np.full(IMAGE_SHAPE, 127, dtype=np.uint8)}
 
     def send_action(self, action: dict[str, object]) -> dict[str, object]:
         if not self._connected:
@@ -251,6 +255,12 @@ def _reload(dataset: LeRobotDataset, root: Path) -> LeRobotDataset:
         schema = reloaded.features[feature]
         if tuple(schema["shape"]) != (7,) or tuple(schema["names"]) != ACTION_NAMES:
             raise RuntimeError(f"unexpected {feature} schema: {schema}")
+    if reloaded.meta.camera_keys != [IMAGE_KEY]:
+        raise RuntimeError(f"unexpected camera schema: {reloaded.meta.camera_keys}")
+    image = reloaded[0][IMAGE_KEY].numpy()
+    if image.shape != (3, IMAGE_SHAPE[0], IMAGE_SHAPE[1]):
+        raise RuntimeError(f"unexpected reloaded RGB shape: {image.shape}")
+    np.testing.assert_allclose(image, 127 / 255, rtol=0.0, atol=1e-7)
     np.testing.assert_allclose(
         reloaded[0]["action"].numpy(),
         [dataset[0]["action"][index] for index in range(7)],
@@ -327,6 +337,7 @@ def main() -> int:
             "frames": reloaded.num_frames,
             "observation_state_names": list(ACTION_NAMES),
             "action_names": list(ACTION_NAMES),
+            "camera_keys": reloaded.meta.camera_keys,
             "recorded_finalized_and_reloaded": True,
         },
         "record": {

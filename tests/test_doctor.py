@@ -159,7 +159,7 @@ def test_project_doctor_accepts_complete_git_archive_release(tmp_path: Path, mon
     (release / "configs").mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "configs/project.json", release / "configs/project.json")
     shutil.copy2(ROOT / "uv.lock", release / "uv.lock")
-    preregistration = "docs/preregistration/PR-20260813-02.md"
+    preregistration = "docs/preregistration/PR-20260906-01.md"
     shutil.copy2(ROOT / preregistration, release / preregistration)
     commit = "b" * 40
     (release / ".piper-release-complete").write_text(commit + "\n", encoding="utf-8")
