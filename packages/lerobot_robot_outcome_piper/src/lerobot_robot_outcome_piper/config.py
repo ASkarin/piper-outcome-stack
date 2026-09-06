@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from lerobot.cameras.configs import CameraConfig
+from lerobot.cameras.configs import CameraConfig, ColorMode
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.robots.config import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
@@ -46,6 +47,22 @@ class OutcomePiperConfig(RobotConfig):
             self.safety_path = Path(self.safety_path)
         if self.hardware_acceptance_path is not None:
             self.hardware_acceptance_path = Path(self.hardware_acceptance_path)
+        if self.cameras:
+            if set(self.cameras) != {"d435"}:
+                raise ValueError("the only camera observation is a single 'd435'")
+            camera = self.cameras["d435"]
+            if not isinstance(camera, RealSenseCameraConfig):
+                raise ValueError("d435 must use the intelrealsense camera implementation")
+            if not camera.serial_number_or_name.isdecimal():
+                raise ValueError("d435 requires the inspected numeric serial number")
+            if any(
+                value is None or value <= 0 for value in (camera.width, camera.height, camera.fps)
+            ):
+                raise ValueError("d435 width, height, and fps must be explicitly verified")
+            if not camera.use_rgb or camera.use_depth or camera.color_mode != ColorMode.RGB:
+                raise ValueError(
+                    "the policy observation requires RGB only: use_rgb=true, use_depth=false"
+                )
 
 
 @TeleoperatorConfig.register_subclass("outcome_piper_xbox")

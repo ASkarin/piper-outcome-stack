@@ -17,6 +17,7 @@ PLUGIN_SRC = Path(__file__).parents[1] / "packages" / "lerobot_robot_outcome_pip
 sys.path.insert(0, str(PLUGIN_SRC))
 
 from lerobot.types import TransitionKey  # noqa: E402
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: E402
 from lerobot.robots import make_robot_from_config  # noqa: E402
 from lerobot.teleoperators import make_teleoperator_from_config  # noqa: E402
 from lerobot_robot_outcome_piper.config import (  # noqa: E402
@@ -41,6 +42,62 @@ from lerobot_robot_outcome_piper import cli, workflows  # noqa: E402
 
 
 NOW = 1_800_000_000.0
+
+
+def d435_config(**kwargs):
+    from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+
+    values = dict(serial_number_or_name="123456789012", width=640, height=480, fps=30)
+    values.update(kwargs)
+    return RealSenseCameraConfig(**values)
+
+
+@pytest.mark.parametrize(
+    "cameras, message",
+    [
+        ({"front": d435_config()}, "single 'd435'"),
+        ({"d435": d435_config(), "side": d435_config()}, "single 'd435'"),
+        (
+            {"d435": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=30)},
+            "intelrealsense",
+        ),
+        ({"d435": d435_config(serial_number_or_name="Intel RealSense D435")}, "serial number"),
+        ({"d435": d435_config(width=None, height=None, fps=None)}, "Specifying 'width'"),
+        ({"d435": d435_config(use_depth=True)}, "RGB only"),
+        ({"d435": d435_config(use_rgb=False, use_depth=True)}, "RGB only"),
+        ({"d435": d435_config(color_mode="bgr")}, "RGB only"),
+    ],
+)
+def test_camera_contract_rejects_unsupported_observations(tmp_path, cameras, message):
+    with pytest.raises(ValueError, match=message):
+        replace(config(tmp_path), cameras=cameras)
+
+
+def test_single_d435_observation_preserves_seven_action_fields(tmp_path):
+    import numpy as np
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    camera = SimpleNamespace(
+        is_connected=True,
+        connect=lambda: None,
+        disconnect=lambda: None,
+        async_read=lambda: frame,
+    )
+    robot = OutcomePiper(
+        replace(config(tmp_path), cameras={"d435": d435_config()}),
+        piper_factory=lambda *_: FakeArm(),
+        camera_factory=lambda _: {"d435": camera},
+        wall_time=lambda: NOW,
+    )
+    try:
+        robot.connect()
+        observation = robot.get_observation()
+        assert set(observation) == {*ACTION_KEYS, "d435"}
+        assert observation["d435"] is frame
+        assert robot.observation_features["d435"] == frame.shape
+        assert tuple(robot.action_features) == ACTION_KEYS
+    finally:
+        robot.disconnect()
 
 
 class FakeFps:
@@ -599,9 +656,9 @@ def test_active_arm_disconnect_stops_and_terminally_latches_session(tmp_path: Pa
 def test_active_camera_disconnect_stops_and_terminally_latches_session(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     robot.connect()
-    robot.cameras["wrist"] = FakeCamera(connected=False)
+    robot.cameras["d435"] = FakeCamera(connected=False)
 
-    with pytest.raises(OutcomePiperStateError, match="camera 'wrist'"):
+    with pytest.raises(OutcomePiperStateError, match="camera 'd435'"):
         robot.get_observation()
 
     assert "electronic_emergency_stop" in arm.calls
@@ -620,7 +677,7 @@ def test_active_connection_probe_error_stops_and_latches_session(tmp_path: Path,
     if probe_target == "arm":
         arm.is_connected = lambda: (_ for _ in ()).throw(OSError("arm probe failed"))
     else:
-        robot.cameras["wrist"] = FakeCamera(fail_probe=True)
+        robot.cameras["d435"] = FakeCamera(fail_probe=True)
 
     with pytest.raises(OutcomePiperStateError, match="latched FAULT"):
         robot.get_observation()
@@ -1219,7 +1276,9 @@ def test_cli_registers_plugins_and_forwards_arguments(monkeypatch):
 
 
 def test_record_injects_canonical_processor_into_official_recorder(monkeypatch):
-    robot_config = SimpleNamespace(execution_mode="motion")
+    robot_config = SimpleNamespace(
+        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}
+    )
     teleop_config = SimpleNamespace(control_hz=20)
     cfg = SimpleNamespace(
         robot=robot_config,
@@ -1245,7 +1304,9 @@ def test_record_injects_canonical_processor_into_official_recorder(monkeypatch):
 
 
 def test_record_rejects_hub_push_inside_isolated_can_namespace(monkeypatch):
-    robot_config = SimpleNamespace(execution_mode="motion")
+    robot_config = SimpleNamespace(
+        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}
+    )
     teleop_config = SimpleNamespace(control_hz=20)
     cfg = SimpleNamespace(
         robot=robot_config,
@@ -1256,6 +1317,24 @@ def test_record_rejects_hub_push_inside_isolated_can_namespace(monkeypatch):
         workflows, "_validate_workflow_configs", lambda *_: (robot_config, teleop_config)
     )
     with pytest.raises(ValueError, match="dataset.push_to_hub=false"):
+        workflows.record(cfg)
+
+
+@pytest.mark.parametrize(
+    "cameras, message", [({}, "single d435"), ({"d435": SimpleNamespace(fps=30)}, "d435 fps")]
+)
+def test_record_rejects_missing_camera_or_rate_mismatch(monkeypatch, cameras, message):
+    robot_config = SimpleNamespace(cameras=cameras)
+    teleop_config = SimpleNamespace(control_hz=20)
+    cfg = SimpleNamespace(
+        robot=robot_config,
+        teleop=teleop_config,
+        dataset=SimpleNamespace(fps=20, push_to_hub=False),
+    )
+    monkeypatch.setattr(
+        workflows, "_validate_workflow_configs", lambda *_: (robot_config, teleop_config)
+    )
+    with pytest.raises(ValueError, match=message):
         workflows.record(cfg)
 
 
@@ -1295,7 +1374,7 @@ def test_record_active_robot_stops_if_teleop_connect_fails(tmp_path: Path, monke
     )
 
     cfg = SimpleNamespace(
-        robot=robot.config,
+        robot=replace(robot.config, cameras={"d435": d435_config(fps=20)}),
         teleop=xbox_config(),
         dataset=DatasetConfig(),
         display_data=False,

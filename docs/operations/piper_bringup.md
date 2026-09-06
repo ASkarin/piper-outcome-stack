@@ -1,34 +1,89 @@
-# Standard PiPER guarded bring-up
+# Standard PiPER and single D435 acceptance
 
-Stage 1B defaults to no hardware. Do not run a motor command from the GPU server or any other host until the execution host, robot serial, CAN adapter, power, physical emergency stop, cleared workspace, and on-site administrator are recorded in the local hardware checklist.
+The user confirmed arrival of the arm and camera on 2026-09-06. This is shipment
+context, not acceptance of identity, wiring, firmware, safety, or motion. Use only
+`piper-local` for real devices. The planning repository's
+`docs/operations/piper_hardware_checklist.md` and `piper_official_alignment.md` define
+the current on-site checks and outstanding software work.
 
-## Allowed order
+## Before real CAN
 
-1. Verify `uv.lock`, installed SDK metadata, and LeRobot plugin discovery.
-2. Create the versioned hardware-acceptance and safety files from the inspected hardware and low-speed tests; incomplete or guessed values cannot enable motors. The acceptance record must bind the nameplate model, robot serial, official gripper, USB-CAN adapter, physical emergency stop, exact `get_firmware()` identity, and safety-file digest. The safety file must freeze the position-mode speed percentage and gripper force.
-3. While the verified real CAN interface is down, use root-owned `piper-socketcan` to
-   move it into the fixed `piper-can` network namespace. The host namespace must no
-   longer see it. Run the doctor without sending a frame: the administrator process in
-   the namespace must be non-root with zero effective capabilities and able to bind;
-   the collaborator in the host namespace must not be able to bind or enter the
-   namespace. Host `vcan` remains available for software tests. Once the exact adapter
-   vendor/product/serial are frozen, install an exact udev match that requests the
-   non-resident `piper-socketcan-isolate@<interface>.service` and prove the same boundary
-   after unplug/replug; do not create a broad CAN hotplug rule.
-4. As the unique administrator, use `piper-socketcan exec --` to connect the immutable
-   release in `read_only` mode and record identity/status evidence. The launcher uses
-   sudo only to enter the namespace, then runs the Python process as the administrator's
-   ordinary UID/GID.
-5. With power disabled, verify zero and direction conventions.
-6. Obtain explicit approval for conservative numeric limits and a single-joint increment.
-7. Verify the damped electronic emergency-stop command under communication loss, watchdog expiry, Xbox disconnect, and hold-to-run release, including that the arm does not drop. The first motion release does not accept a software-only hold strategy. Test the physical emergency stop before any broader motion.
+1. Inspect the standard PiPER nameplate/serial, official gripper, power and harness,
+   USB-CAN adapter, base fastening, tool/load, and the delivered manual revision.
+   Record the actual firmware identity supplied with the arm; do not try driver
+   variants or update firmware to find a working combination.
+2. Identify the independent physical emergency stop and its effect. The teach button
+   can start recording/playback; it and the host application's stop button do not
+   establish an independent physical stop. Do not test them by starting a trajectory.
+3. Verify the candidate commit, locks, plugin discovery, and immutable release. The
+   release must include the single-camera contract and pass its own acceptance;
+   an earlier release's acceptance marker does not validate the updated code.
+4. Isolate the inspected real CAN interface while DOWN using `piper-socketcan` in the
+   fixed `piper-can` namespace. Verify administrator bind and collaborator denial
+   without sending frames. Establish exact USB hotplug rules only from inspected
+   identifiers. Do not assume a default interface or create broad device rules.
 
-Any unexplained motion, zero drift, CAN fault, feedback timeout, or failed stop ends the session. Stage 1B does not authorize data collection, multi-joint sweeps, unattended motion, or use of official example limits as approved project limits.
+## Read-only, stopping, then motion
 
-## Teleoperation decision
+5. After the administrator authorizes real CAN bring-up, use the immutable release in
+   `read_only` for five connect/read/disconnect cycles. It sends firmware queries but
+   does not enable, home, reset, or change motion mode. Record actual motor-enable
+   status separately: the software name `CONNECTED_DISABLED` is not proof that the
+   arm was disabled before connection. Verify units, feedback groups, and freshness.
+6. Perform the manufacturer's approved, mechanically supported stop acceptance in
+   a separate on-site administrator task. Official electronic emergency stop allows
+   damped descent; disable/reset can lose support immediately. An in-process watchdog
+   cannot send a CAN stop after the cable is removed or the process exits. Record
+   these cases separately and keep the project motion gate closed if hazardous
+   descent or unverified stop behavior remains.
+7. Only after these checks produce real evidence, create the hardware-acceptance and
+   safety documents. Bind exact live firmware, hardware identity and the approved
+   safety-file digest. Freeze conservative limits, workspace, timing, speed percent,
+   and gripper force. Never fill acceptance booleans merely to enter motion.
+8. Start with approved single-joint increments, then joints/gripper and Xbox
+   hold-to-run. No automatic home/reset/retry. Stop and end the session on unexplained
+   motion, incorrect direction/zero, stale feedback, or a failed stop.
 
-The only formal path is teleoperator type `outcome_piper_xbox` through the
-`piper-outcome-stack` workflow, which injects the canonical action processor into
-official LeRobot. Until Stage 1B hardware gates pass, only synthetic input mapping and
-the safety gate may be tested; hardware availability and real teleoperation remain
-unverified.
+Before accepting motion, close the mode-confirmation gap: the current plugin reads
+cached status immediately after setting the mode. Confirmation needs fresh feedback
+within a bounded interval, without resending the mode or any motion command.
+
+## One D435
+
+Independent RGB/depth camera inspection can precede robot motion. Bind the inspected
+numeric serial, verify USB topology and both video/USB-node permissions, and use
+`PIPER_D435_SERIAL` for doctor. Multiple nodes from one D435 are not multiple cameras.
+Check RGB/depth profiles, depth scale, usable working distance, invalid depth pixels,
+intrinsics, mounting, exposure and timestamp domains.
+
+The policy input is one fixed external RGB view plus the seven robot state values.
+The only camera key is `d435`; the only Dataset image key is
+`observation.images.d435`. Configure it with measured values:
+
+```python
+from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+
+cameras = {
+    "d435": RealSenseCameraConfig(
+        serial_number_or_name=verified_serial,
+        width=verified_width,
+        height=verified_height,
+        fps=verified_fps,
+        use_rgb=True,
+        use_depth=False,
+        color_mode="rgb",
+    )
+}
+```
+
+These variables are intentionally supplied by acceptance, not defaults. Robot-only
+bring-up may use an empty camera map; `record` requires D435, matching camera/Dataset/
+Xbox fps, and `dataset.push_to_hub=false`. Upload after finalization from the host
+namespace. Depth is inspected/calibrated separately and is not a policy feature.
+
+Equal fps does not prove synchronization. Before pilot collection, implement and
+validate image/state/action timestamp recording: current SDK feedback uses wall time,
+while the camera cache uses `perf_counter()`, and the recorder does not persist their
+alignment. Keep the 30-minute concurrent stability, 20 safe episodes, and 20 pilot
+trajectories with record/finalize/reload/replay checks. Test the image pipeline with
+`infra/acceptance/lerobot_dataset_replay_smoke.py`; it provides synthetic evidence only.

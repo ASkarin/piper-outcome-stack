@@ -11,4 +11,11 @@ runtime backend abstraction.
 
 Only the first two enter the runtime dependency graph. All runtime Git dependencies use
 public HTTPS and full commits. Exact firmware and numeric safety values come from the
-arriving standard PiPER and its low-speed acceptance; they are not guessed here.
+delivered standard PiPER and its low-speed acceptance; they are not guessed here.
+
+The single D435 uses the pinned LeRobot RealSense implementation with an inspected
+serial and RGB stream profile. The policy schema has exactly one image key,
+`observation.images.d435`; depth is inspected and calibrated separately. The 2026-09-06
+review uses the pinned SDK's [PiPER API](https://github.com/agilexrobotics/pyAgxArm/blob/799b8412fbe8b9156bc9892d3dbeb2df7e98be71/docs/piper/piper_api.md)
+and [firmware reference](https://github.com/agilexrobotics/pyAgxArm/blob/799b8412fbe8b9156bc9892d3dbeb2df7e98be71/docs/piper/firmware_reference.md).
+See [bring-up](piper_bringup.md) for the current acceptance order and unresolved gaps.

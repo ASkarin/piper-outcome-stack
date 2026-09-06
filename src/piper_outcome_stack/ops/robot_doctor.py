@@ -69,27 +69,28 @@ def _target_devices() -> tuple[dict[str, Any], dict[str, list[str]]]:
         can_interfaces.append(target_can_interface)
     by_id = Path("/dev/v4l/by-id")
     video_links = sorted(by_id.iterdir()) if by_id.is_dir() else []
-    d435 = [
-        path
-        for path in video_links
-        if "realsense" in path.name.lower() or "d435" in path.name.lower()
-    ]
-    ar0234 = [path for path in video_links if "ar0234" in path.name.lower()]
-    configured_ar0234 = os.environ.get("PIPER_AR0234_DEVICE")
-    if configured_ar0234:
-        ar0234.append(Path(configured_ar0234))
+    serial = os.environ.get("PIPER_D435_SERIAL")
+    if serial and not serial.isdecimal():
+        raise ValueError("PIPER_D435_SERIAL must be the inspected numeric serial number")
+    d435 = [path for path in video_links if serial and f"_{serial}-video-index" in path.name]
+    # RealSense also opens the USB device; video-node permissions alone are insufficient.
+    if serial:
+        for serial_file in sorted(Path("/sys/bus/usb/devices").glob("*/serial")):
+            if serial_file.read_text().strip() == serial:
+                usb = serial_file.parent
+                bus = int((usb / "busnum").read_text())
+                device = int((usb / "devnum").read_text())
+                d435.append(Path(f"/dev/bus/usb/{bus:03d}/{device:03d}"))
     input_by_id = Path("/dev/input/by-id")
     xbox = sorted(input_by_id.glob("*-event-joystick")) if input_by_id.is_dir() else []
     access = {
         "can": _can_access(target_can_interface),
         "d435": _ordinary_device_access(d435),
-        "ar0234": _ordinary_device_access(ar0234),
         "xbox": _ordinary_device_access(xbox),
     }
     inventory = {
         "can_interfaces": can_interfaces,
         "d435_nodes": [str(path) for path in d435],
-        "ar0234_nodes": [str(path) for path in ar0234],
         "xbox_nodes": [str(path) for path in xbox],
     }
     return access, inventory
@@ -120,7 +121,7 @@ def _not_checked_targets() -> dict[str, Any]:
             "bind_succeeded": None,
             "error": None,
         },
-        **{name: {"status": "not_checked", "devices": []} for name in ("d435", "ar0234", "xbox")},
+        **{name: {"status": "not_checked", "devices": []} for name in ("d435", "xbox")},
     }
 
 
