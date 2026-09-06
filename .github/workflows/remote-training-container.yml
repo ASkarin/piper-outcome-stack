@@ -105,7 +105,7 @@ jobs:
               direct_url = json.loads(distribution.read_text("direct_url.json"))
               assert direct_url["vcs_info"]["commit_id"] == commit
           PIPER_PLUGIN_IDENTITY
-          uv run --no-sync pytest tests/test_plugin.py tests/test_local_controller_policy.py tests/test_robot_doctor.py
+          uv run --no-sync pytest tests/test_plugin.py tests/test_capture_timing.py tests/test_recording_telemetry.py tests/test_piper_read_only_cycles.py tests/test_piper_read_only_probe.py tests/test_local_controller_policy.py tests/test_robot_doctor.py
       - name: Install the runner's SocketCAN test module
         run: |
           sudo apt-get update

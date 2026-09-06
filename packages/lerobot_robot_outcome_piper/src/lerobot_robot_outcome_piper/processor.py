@@ -33,11 +33,12 @@ class OutcomePiperAction(dict[str, float]):
     official recorder continues to serialize exactly the canonical schema.
     """
 
-    __slots__ = ("execute_motion",)
+    __slots__ = ("execute_motion", "generated_monotonic_s")
 
     def __init__(self, values: dict[str, float], *, execute_motion: bool) -> None:
         super().__init__(values)
         self.execute_motion = execute_motion
+        self.generated_monotonic_s = time.monotonic()
 
 
 def _angle_delta(actual: float, target: float) -> float:

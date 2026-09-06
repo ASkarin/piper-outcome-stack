@@ -62,7 +62,7 @@ def _finite_vector(value: object, label: str, length: int) -> tuple[float, ...]:
     return result
 
 
-def _validate_firmware_driver(software_version: str, firmware: str) -> None:
+def _validate_firmware_driver(software_version: str, firmware: str) -> tuple[int, int, int]:
     match = _SOFTWARE_VERSION.fullmatch(software_version)
     if match is None:
         raise OutcomePiperValidationError(
@@ -80,6 +80,7 @@ def _validate_firmware_driver(software_version: str, firmware: str) -> None:
             f"firmware driver {firmware!r} does not match live software_version "
             f"{software_version!r}"
         )
+    return version
 
 
 def _validated_acceptance(
@@ -95,7 +96,6 @@ def _validated_acceptance(
     required_true = (
         "standard_piper_verified",
         "official_gripper_verified",
-        "official_power_and_harness_verified",
         "official_usb_can_verified",
         "physical_emergency_stop_verified",
         "five_read_only_cycles_verified",
@@ -139,7 +139,14 @@ def _validated_acceptance(
             )
     if expected_firmware["node_type"] != "ARM_MC":
         raise OutcomePiperValidationError("firmware identity is not a PiPER arm controller")
-    _validate_firmware_driver(expected_firmware["software_version"], firmware)
+    version = _validate_firmware_driver(expected_firmware["software_version"], firmware)
+    # The pinned SDK's PiPER MDH uses the J2/J3 offsets introduced in S-V1.6-3.
+    # Driver compatibility alone does not establish FK/IK model compatibility.
+    if version < (1, 6, 3):
+        raise OutcomePiperValidationError(
+            "motion requires software_version >= S-V1.6-3 for the pinned PiPER MDH model; "
+            f"acceptance records {expected_firmware['software_version']!r}"
+        )
     return acceptance
 
 

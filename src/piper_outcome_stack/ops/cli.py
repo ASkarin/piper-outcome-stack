@@ -24,12 +24,21 @@ def _parser() -> argparse.ArgumentParser:
     robot = commands.add_parser("robot")
     robot_actions = robot.add_subparsers(dest="robot_action", required=True)
     robot_actions.add_parser("doctor")
+    audit = commands.add_parser("audit-dataset")
+    audit.add_argument("--root", required=True)
+    audit.add_argument("--repo-id", required=True)
     commands.add_parser("teleoperate", add_help=False)
     commands.add_parser("record", add_help=False)
     return parser
 
 
 def _run(args: argparse.Namespace) -> Any:
+    if args.command == "audit-dataset":
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        from lerobot_robot_outcome_piper.recording import verify_telemetry
+
+        dataset = LeRobotDataset(args.repo_id, root=args.root)
+        return verify_telemetry(args.root, dataset)
     if args.command == "doctor":
         return doctor_project(args.root)
     if args.command == "robot" and args.robot_action == "doctor":

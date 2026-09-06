@@ -1,16 +1,21 @@
 # Standard PiPER and single D435 acceptance
 
-The user confirmed arrival of the arm and camera on 2026-09-06. This is shipment
-context, not acceptance of identity, wiring, firmware, safety, or motion. Use only
+The user confirmed arrival of the arm and camera and the factory-supplied PiPER kit
+on 2026-09-06. Firmware, safety and motion require their own acceptance. Use only
 `piper-local` for real devices. The planning repository's
 `docs/operations/piper_hardware_checklist.md` and `piper_official_alignment.md` define
 the current on-site checks and outstanding software work.
 
 ## Before real CAN
 
-1. Inspect the standard PiPER nameplate/serial, official gripper, power and harness,
-   USB-CAN adapter, base fastening, tool/load, and the delivered manual revision.
-   Record the actual firmware identity supplied with the arm; do not try driver
+1. Use the complete factory-supplied PiPER kit confirmed by the user. Record the
+   standard PiPER nameplate/serial, official gripper and enumerated USB-CAN identity;
+   verify base fastening, tool/load, and the delivered manual revision.
+   Record the actual firmware identity. If it is not supplied with the arm, use
+   `infra/acceptance/piper_read_only_probe.py`: the pinned PiPER drivers share the
+   same firmware-query implementation, so its base profile can query identity once
+   before selecting the matching driver for feedback. This is an initial SDK
+   inspection, separate from five-cycle plugin acceptance. Do not try driver
    variants or update firmware to find a working combination.
 2. Identify the independent physical emergency stop and its effect. The teach button
    can start recording/playback; it and the host application's stop button do not
@@ -39,14 +44,23 @@ the current on-site checks and outstanding software work.
 7. Only after these checks produce real evidence, create the hardware-acceptance and
    safety documents. Bind exact live firmware, hardware identity and the approved
    safety-file digest. Freeze conservative limits, workspace, timing, speed percent,
-   and gripper force. Never fill acceptance booleans merely to enter motion.
+   and gripper force. Motion requires S-V1.6-3 or later to match the pinned SDK's
+   PiPER MDH model; a compatible CAN driver alone is insufficient. Earlier firmware
+   can be inspected in read-only mode, but cannot pass this motion gate. Never fill
+   acceptance booleans merely to enter motion.
 8. Start with approved single-joint increments, then joints/gripper and Xbox
    hold-to-run. No automatic home/reset/retry. Stop and end the session on unexplained
    motion, incorrect direction/zero, stale feedback, or a failed stop.
 
-Before accepting motion, close the mode-confirmation gap: the current plugin reads
-cached status immediately after setting the mode. Confirmation needs fresh feedback
-within a bounded interval, without resending the mode or any motion command.
+The plugin requests J mode once, then waits for fresh CAN/J status within
+`feedback_timeout_s` before enabling. Missing confirmation or a controller fault aborts
+connection. Subsequent motion feedback must remain in CAN/J mode; a mode change latches
+the session before the next action. Receive timestamps are captured around the official
+SDK parsing callback using the host monotonic clock. SDK wall timestamps are retained
+as provenance, not used for timeout arithmetic. Initial complete feedback has a bounded
+wait distinct from runtime staleness; firmware is queried once. These software paths
+still require the five normal-plugin read-only cycles on the candidate release.
+See the [official-source comparison](piper_integration_sources.md).
 
 ## One D435
 
@@ -81,9 +95,39 @@ bring-up may use an empty camera map; `record` requires D435, matching camera/Da
 Xbox fps, and `dataset.push_to_hub=false`. Upload after finalization from the host
 namespace. Depth is inspected/calibrated separately and is not a policy feature.
 
-Equal fps does not prove synchronization. Before pilot collection, implement and
-validate image/state/action timestamp recording: current SDK feedback uses wall time,
-while the camera cache uses `perf_counter()`, and the recorder does not persist their
-alignment. Keep the 30-minute concurrent stability, 20 safe episodes, and 20 pilot
-trajectories with record/finalize/reload/replay checks. Test the image pipeline with
-`infra/acceptance/lerobot_dataset_replay_smoke.py`; it provides synthetic evidence only.
+Equal fps does not prove synchronization. The RGB publication extension preserves
+RealSense frame number/device timestamp/domain and host receive/publish time atomically.
+A read consumes a new frame or times out; capture failures do not retry. The common
+image/state axis is host receipt time, not an estimate of simultaneous exposure.
+
+`OutcomePiperConfig.capture_timing` takes four measured, approved positive seconds:
+`camera_max_age_s`, `joint_max_skew_s`, `image_state_max_skew_s`, and
+`observation_max_age_s`. Pass them through `--robot.capture_timing.<field>=<approved-value>`.
+Read-only sessions may omit them for measurement; motion with a camera and record
+require them. Do not copy synthetic test limits to hardware. Robot-only motion still
+uses its frozen feedback timeout for observation-to-command age.
+
+Recording calls the official `record_loop` and Dataset APIs, with episode-boundary
+orchestration for `telemetry/<session>/events.jsonl` and `complete.json`. Sidecars contain
+session/episode/frame/attempt identities, the observation's receive times, frame metadata,
+processed action generation time, and SDK call start/end/results. A direct plain-dict
+action has no known generation time (null); dispatch time is recorded independently.
+An SDK return is not a target-arrival acknowledgement. Policy vectors remain unchanged.
+Discarded attempts stay in the event log. Failed/interrupted/finalization-incomplete
+sessions have no valid complete marker and are rejected by resume and data acceptance.
+
+Before promoting any locally recorded Dataset or using it for training, run:
+
+```bash
+piper-outcome-stack audit-dataset --root <dataset-root> --repo-id <exact-repo-id>
+```
+
+Keep the Dataset and telemetry directory together. Audit failure blocks promotion;
+never manufacture completion markers, discard telemetry, or silently train on an
+interrupted recording. Resume additionally verifies exact robot, fps, feature names,
+shapes and dtypes using the current Robot.name contract.
+
+Keep the 30-minute concurrent stability, 20 safe episodes, and 20 pilot trajectories
+with record/finalize/reload/replay checks. Tests `test_capture_timing.py` and
+`test_recording_telemetry.py` exercise synthetic timing and real official Dataset APIs;
+they do not freeze hardware thresholds or count as real-robot acceptance.

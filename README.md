@@ -12,8 +12,8 @@ resume framework. Use the official LeRobot lifecycle directly:
 
 - `LeRobotDataset` v3 for recording, finalization, reload, and replay;
 - `piper-outcome-stack record` and `piper-outcome-stack teleoperate` for Xbox workflows,
-  delegating lifecycle management to official LeRobot while injecting the required action
-  processor; `lerobot-replay` remains the direct replay entry point;
+  using official loops/Dataset APIs with the required action processor and per-row
+  telemetry sidecars; `lerobot-replay` remains the direct replay entry point;
 - `lerobot-train` for ACT/SmolVLA training and checkpoint resume;
 - Hugging Face revisions plus the promoted cross-host artifact boundary for published
   datasets and models.
@@ -46,6 +46,11 @@ hardware-validated electronic emergency stop and latch the session; a new motion
 session is required after operator intervention. Disconnect does not home, reset, or
 disable the arm.
 
+Motion waits for fresh CAN/J mode confirmation before enable and checks that mode on
+subsequent feedback. Firmware must also match the pinned PiPER kinematic model
+(S-V1.6-3 or later). See the [official-source comparison](docs/operations/piper_integration_sources.md)
+for how the printed manual's SDK/ROS examples apply to this project.
+
 There is no runtime account, Unix socket, operator permit, resident control service, or
 mock control path. Collaborators cannot enter the target real-CAN namespace, bind its
 interface, open the target camera/gamepad nodes, use sudo, or modify an immutable
@@ -56,14 +61,16 @@ training, evaluation, host permissions, immutable releases, and real validation
 evidence. The single D435 uses LeRobot's RealSense implementation, its inspected numeric
 serial, and explicit RGB resolution/fps. Depth is inspected and calibrated separately;
 the first ACT/SmolVLA/outcome-model input uses RGB and the seven state values. Robot-only
-bring-up may omit the camera; recording requires it and matching camera/Dataset/Xbox fps.
+bring-up may omit the camera; recording requires it, matching camera/Dataset/Xbox fps
+and measured `robot.capture_timing` values.
 See [acceptance instructions](docs/operations/piper_bringup.md). Xbox GUID, axes, directions, trigger endpoints,
 deadzone, control rate, step limits, workspace, and safety limits have no guessed
 defaults and must be frozen after hardware acceptance.
 
 The arm and camera have arrived (user confirmation, 2026-09-06); actual hardware gates
-remain unverified. Mode-feedback confirmation and persisted image/state/action timing remain acceptance blockers as
-described in the bring-up instructions. Run the doctor with the inspected
+are tracked separately from software readiness. The read-only SDK identity probe passed;
+five normal-plugin sessions, motion/stop behavior and real image/state/action timing
+acceptance remain open as described in the bring-up instructions. Run the doctor with the inspected
 `PIPER_D435_SERIAL`; both video and USB nodes require permission verification.
 
 ## Commands and verification
@@ -71,6 +78,7 @@ described in the bring-up instructions. Run the doctor with the inspected
 ```bash
 piper-outcome-stack doctor --root .
 piper-outcome-stack robot doctor
+piper-outcome-stack audit-dataset --root <dataset-root> --repo-id <exact-repo-id>
 piper-outcome-stack teleoperate --robot.type=outcome_piper --teleop.type=outcome_piper_xbox ...
 piper-outcome-stack record --robot.type=outcome_piper --teleop.type=outcome_piper_xbox \
   --dataset.push_to_hub=false ...

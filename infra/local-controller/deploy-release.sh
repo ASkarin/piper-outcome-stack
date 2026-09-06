@@ -166,6 +166,10 @@ PIPER_RUNTIME_PLUGIN_DISCOVERY
         PYTEST_ADDOPTS="-p no:cacheprovider" \
         "${acceptance_python}" -m pytest --quiet \
         "${release}/tests/test_plugin.py" \
+        "${release}/tests/test_capture_timing.py" \
+        "${release}/tests/test_recording_telemetry.py" \
+        "${release}/tests/test_piper_read_only_cycles.py" \
+        "${release}/tests/test_piper_read_only_probe.py" \
         "${release}/tests/test_local_controller_policy.py"
 
     local dataset_replay_root=${acceptance_temporary}/dataset-replay
@@ -274,6 +278,10 @@ summary = {
             "status": "passed",
             "tests": [
                 "tests/test_plugin.py",
+                "tests/test_capture_timing.py",
+                "tests/test_recording_telemetry.py",
+                "tests/test_piper_read_only_cycles.py",
+                "tests/test_piper_read_only_probe.py",
                 "tests/test_local_controller_policy.py",
             ],
         },

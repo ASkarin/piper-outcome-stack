@@ -12,6 +12,8 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.robots.config import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
+from .timing import CaptureTiming
+
 
 Firmware = Literal["default", "v183", "v188", "v189"]
 ExecutionMode = Literal["read_only", "motion"]
@@ -27,6 +29,7 @@ class OutcomePiperConfig(RobotConfig):
     safety_path: Path | None = None
     hardware_acceptance_path: Path | None = None
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    capture_timing: CaptureTiming | None = None
     id: str = "outcome_piper"
 
     def __post_init__(self) -> None:
@@ -47,6 +50,10 @@ class OutcomePiperConfig(RobotConfig):
             self.safety_path = Path(self.safety_path)
         if self.hardware_acceptance_path is not None:
             self.hardware_acceptance_path = Path(self.hardware_acceptance_path)
+        if isinstance(self.capture_timing, dict):
+            self.capture_timing = CaptureTiming(**self.capture_timing)
+        if self.execution_mode == "motion" and self.cameras and self.capture_timing is None:
+            raise ValueError("motion with d435 requires measured capture_timing")
         if self.cameras:
             if set(self.cameras) != {"d435"}:
                 raise ValueError("the only camera observation is a single 'd435'")
