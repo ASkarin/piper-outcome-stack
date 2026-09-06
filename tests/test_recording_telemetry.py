@@ -24,6 +24,7 @@ class Robot(smoke.FakeRobot):
         self.config = NS(cameras={"d435": object()})
         self.last_observation_telemetry = None
         self.last_action_telemetry = None
+        self.latched_cause = None
 
     def get_observation(self):
         result = super().get_observation()
@@ -113,7 +114,7 @@ def test_rerecord_preserves_discarded_attempt_and_commits_only_replacement(tmp_p
     assert len([r for r in rows if r["event"] == "episode_discarded"]) == 1
 
 
-@pytest.mark.parametrize("failure", ["write", "finalize", "interrupt", "mismatch"])
+@pytest.mark.parametrize("failure", ["write", "finalize", "interrupt", "mismatch", "late_fault"])
 def test_incomplete_recording_is_preserved_and_rejected(tmp_path, monkeypatch, failure):
     robot, teleop, _, listener = devices(monkeypatch)
     cfg = configuration(tmp_path / "dataset")
@@ -131,6 +132,14 @@ def test_incomplete_recording_is_preserved_and_rejected(tmp_path, monkeypatch, f
             raise OSError("finalize failed")
 
         monkeypatch.setattr(LeRobotDataset, "finalize", failed_finalize)
+    elif failure == "late_fault":
+        original = LeRobotDataset.finalize
+
+        def faulted_finalize(self):
+            original(self)
+            robot.latched_cause = "watchdog fault"
+
+        monkeypatch.setattr(LeRobotDataset, "finalize", faulted_finalize)
     elif failure == "interrupt":
         monkeypatch.setattr(
             robot, "send_action", lambda *_: (_ for _ in ()).throw(KeyboardInterrupt())

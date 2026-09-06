@@ -268,6 +268,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
     finally:
         try:
             with ExitStack() as cleanup:
+                cleanup.callback(dataset.finalize)
                 if cfg.display_data:
                     cleanup.callback(official.shutdown_visualization, cfg.display_mode)
                 if listener is not None:
@@ -276,8 +277,9 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
                     cleanup.callback(teleop.disconnect)
                 if robot.is_connected:
                     cleanup.callback(robot.disconnect)
-                cleanup.callback(dataset.finalize)
             if success and audit is not None:
+                if robot.latched_cause is not None:
+                    raise RuntimeError(f"recording session faulted: {robot.latched_cause}")
                 audit.complete()
         finally:
             if audit is not None:
