@@ -219,3 +219,67 @@ def test_required_upstream_license_texts_are_retained():
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert required_text in text
         assert len(text) > 1_000
+
+
+def test_release_preflight_accepts_git_worktrees_and_rejects_invalid_or_dirty_sources(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", *map(str, args)], check=True, capture_output=True, text=True)
+
+    primary = tmp_path / "primary"
+    git("init", "--quiet", primary)
+    (primary / "source.txt").write_text("committed source\n")
+    git("-C", primary, "add", "source.txt")
+    git(
+        "-C",
+        primary,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+    )
+    linked = tmp_path / "linked"
+    git("-C", primary, "worktree", "add", "--detach", linked, "HEAD")
+    expected = git("-C", primary, "rev-parse", "HEAD").stdout.strip()
+
+    # Execute the real install preflight only. No root, /opt writes or installs.
+    script = (LOCAL / "deploy-release.sh").read_text()
+    fail = script[script.index("fail() {") : script.index("cleanup() {")]
+    git_source = script[script.index("git_source() {") : script.index("locked_uv() {")]
+    checks = script.split("    install)\n", 1)[1].split("        destination=", 1)[0]
+    program = "set -euo pipefail\n" + fail + git_source + checks + '\nprintf "%s\\n" "$commit"\n'
+
+    def check(path):
+        return subprocess.run(
+            ["bash", "-c", program, "preflight", "install", str(path)],
+            capture_output=True,
+            text=True,
+        )
+
+    assert (primary / ".git").is_dir()
+    assert (linked / ".git").is_file()
+    for path in (primary, linked):
+        result = check(path)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == expected
+    invalid = tmp_path / "invalid"
+    invalid.mkdir()
+    (invalid / ".git").write_text("gitdir: missing\n")
+    nested = primary / "nested"
+    nested.mkdir()
+    for path in (invalid, nested):
+        result = check(path)
+        assert result.returncode != 0
+        assert "source must be a Git checkout" in result.stderr
+    (linked / "source.txt").write_text("modified\n")
+    assert "source worktree is dirty" in check(linked).stderr
+    git("-C", linked, "add", "source.txt")
+    assert "source index is dirty" in check(linked).stderr
+    git("-C", linked, "restore", "--staged", "--worktree", "source.txt")
+    (linked / "untracked.txt").write_text("not committed\n")
+    assert "source checkout contains untracked files" in check(linked).stderr

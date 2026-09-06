@@ -375,7 +375,9 @@ PIPER_VERIFY_ACCEPTANCE
 case "${action}" in
     install)
         source_root=${2:-}
-        [[ -d "${source_root}/.git" ]] || fail "source must be a Git checkout"
+        [[ -e "${source_root}/.git" ]] && \
+            [[ "$(git_source rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || \
+            fail "source must be a Git checkout"
         git_source diff --quiet || fail "source worktree is dirty"
         git_source diff --cached --quiet || fail "source index is dirty"
         [[ -z "$(git_source status --porcelain --untracked-files=all)" ]] || \
