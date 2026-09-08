@@ -30,3 +30,7 @@
 跑任何检查之前先回答:这次运行会检测出什么具体的失败?真出现了我下一步会做什么不同的事?
 答不上来就别跑。
 对的就说对。不要为了交差硬找问题。
+
+## Approved planning scope, 2026-09-08
+
+Simulation/sim2real is a core workstream alongside real ACT learning and action-outcome prediction. The planning repository's `docs/roadmap/piper_sim2real_workstream.md` defines S0–S3 and the three ACT data-source comparisons. This approval is documentation-only: code, tests, runtime configs, dependency locks/installations, assets, experiments and hardware execution await explicit subsequent approval. The existing SDK/LeRobot control path stays unchanged. The user subsequently approved repairs and device code synchronization. This authorizes the existing-stack fixes and binding PR-20260908-01, but still does not authorize simulation implementation or hardware motion.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import itertools
 import json
 import math
 import sys
@@ -35,6 +36,8 @@ from lerobot_robot_outcome_piper.processor import (  # noqa: E402
     OutcomePiperAction,
     OutcomePiperXboxProcessor,
 )
+from lerobot_robot_outcome_piper.timing import CaptureTiming, ReceivedFeedback  # noqa: E402
+from lerobot_robot_outcome_piper.camera import CameraTelemetry  # noqa: E402
 from lerobot_robot_outcome_piper.robot import OutcomePiper, PiperState  # noqa: E402
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS, JOINT_KEYS, MotionSafety  # noqa: E402
 from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox  # noqa: E402
@@ -81,13 +84,18 @@ def test_single_d435_observation_preserves_seven_action_fields(tmp_path):
         is_connected=True,
         connect=lambda: None,
         disconnect=lambda: None,
-        async_read=lambda: frame,
+        read_with_metadata=lambda timeout: (
+            frame,
+            CameraTelemetry(1, 1.0, "hardware_clock", 100.0, 100.0),
+        ),
     )
     robot = OutcomePiper(
         replace(config(tmp_path), cameras={"d435": d435_config()}),
         piper_factory=lambda *_: FakeArm(),
         camera_factory=lambda _: {"d435": camera},
+        monotonic=lambda: 100.0,
         wall_time=lambda: NOW,
+        receiver_factory=FakeReceiver,
     )
     try:
         robot.connect()
@@ -98,6 +106,54 @@ def test_single_d435_observation_preserves_seven_action_fields(tmp_path):
         assert tuple(robot.action_features) == ACTION_KEYS
     finally:
         robot.disconnect()
+
+
+class FakeReceiver:
+    """Explicit receive events simulated in host monotonic time, separate from UTC."""
+
+    def __init__(self, arm, gripper, clock):
+        self.arm, self.gripper, self.clock = arm, gripper, clock
+
+    def wait_ready(self, timeout):
+        return True
+
+    def status(self):
+        status = self.arm.get_arm_status()
+        return status, None if status is None else 100.0 + (status.timestamp - NOW)
+
+    def driver_states(self):
+        return tuple(
+            (
+                SimpleNamespace(
+                    msg=SimpleNamespace(
+                        foc_status=SimpleNamespace(
+                            driver_enable_status=self.arm.enabled, driver_error_status=False
+                        )
+                    )
+                ),
+                self.clock(),
+            )
+            for _ in range(6)
+        )
+
+    def snapshot(self):
+        frames = tuple(
+            getattr(self.arm._parser, name, None) for name in ("joint_12", "joint_34", "joint_56")
+        )
+        if any(f is None for f in frames):
+            raise RuntimeError("incomplete joint feedback groups")
+        status, gripper = self.arm.get_arm_status(), self.gripper.get_gripper_status()
+        return ReceivedFeedback(
+            self.arm.get_joint_angles(),
+            gripper,
+            status,
+            frames,
+            tuple(self.arm._ctx.fps.get_fps(f.msg_type) for f in frames),
+            tuple(
+                100.0 + (t - NOW)
+                for t in (*[f.timestamp for f in frames], status.timestamp, gripper.timestamp)
+            ),
+        )
 
 
 class FakeFps:
@@ -147,6 +203,7 @@ class FakeArm:
         self.fail_feedback = False
         self.fail_command = False
         self.enable_result = True
+        self.enabled = False
         self.joints = [0.0] * 6
         self.status = 0
         self.error_code = 0
@@ -210,12 +267,14 @@ class FakeArm:
 
     def set_motion_mode(self, value):
         self.calls.append(("motion_mode", value))
+        self.status_timestamp = NOW
 
     def set_speed_percent(self, value):
         self.calls.append(("speed_percent", value))
 
     def enable(self):
         self.calls.append("enable")
+        self.enabled = True
         return self.enable_result
 
     def electronic_emergency_stop(self):
@@ -291,6 +350,7 @@ def safety() -> MotionSafety:
 
 
 def write_gate(tmp_path: Path, *, nameplate_model="PiPER") -> tuple[Path, Path]:
+    """Create synthetic acceptance for the factory-supplied PiPER kit."""
     safety_path = tmp_path / "safety.json"
     safety_path.write_text(
         json.dumps(
@@ -323,7 +383,6 @@ def write_gate(tmp_path: Path, *, nameplate_model="PiPER") -> tuple[Path, Path]:
                 "schema_version": "outcome-piper-hardware-acceptance-v1",
                 "standard_piper_verified": True,
                 "official_gripper_verified": True,
-                "official_power_and_harness_verified": True,
                 "official_usb_can_verified": True,
                 "physical_emergency_stop_verified": True,
                 "five_read_only_cycles_verified": True,
@@ -393,6 +452,7 @@ def make_robot(tmp_path: Path, *, mode="read_only", accepted=True):
         camera_factory=lambda _: {},
         monotonic=lambda: 100.0,
         wall_time=lambda: NOW,
+        receiver_factory=FakeReceiver,
     )
     return robot, arm, factory_calls
 
@@ -469,6 +529,43 @@ def test_motion_connect_configures_one_mode_and_enables(tmp_path: Path):
     assert "enable" in arm.calls
 
 
+@pytest.mark.parametrize("software_version", ["S-V1.6-2", "S-V1.6-3"])
+def test_motion_firmware_must_match_pinned_kinematics(tmp_path: Path, software_version):
+    robot, arm, factory_calls = make_robot(tmp_path, mode="motion")
+    robot.config = replace(robot.config, firmware="default")
+    acceptance_path = robot.config.hardware_acceptance_path
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    acceptance["firmware"] = "default"
+    acceptance["firmware_identity"]["software_version"] = software_version
+    acceptance_path.write_text(json.dumps(acceptance), encoding="utf-8")
+    arm.firmware["software_version"] = software_version
+    try:
+        if software_version == "S-V1.6-2":
+            with pytest.raises(OutcomePiperValidationError, match="pinned PiPER MDH model"):
+                robot.connect()
+            assert factory_calls == []
+            assert arm.calls == []
+        else:
+            robot.connect()
+            assert robot.state is PiperState.ACTIVE
+            assert "enable" in arm.calls
+    finally:
+        robot.disconnect()
+
+
+def test_read_only_can_inspect_firmware_before_kinematics_change(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path)
+    robot.config = replace(robot.config, firmware="default")
+    arm.firmware["software_version"] = "S-V1.6-2"
+    try:
+        robot.connect()
+        assert robot.get_observation() == valid_action()
+        assert "enable" not in arm.calls
+        assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
+    finally:
+        robot.disconnect()
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -494,9 +591,173 @@ def test_motion_mode_feedback_must_confirm_can_move_j_before_enable(
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     arm.ctrl_mode = ctrl_mode
     arm.mode_feedback = mode_feedback
-    with pytest.raises(OutcomePiperStateError, match="motion-mode feedback mismatch"):
+    robot._monotonic = itertools.count(100.0, 0.02).__next__
+    with pytest.raises(OutcomePiperStateError, match="motion-mode feedback confirmation timed out"):
         robot.connect()
     assert "enable" not in arm.calls
+    assert arm.calls.count(("motion_mode", "J")) == 1
+
+
+def test_mode_confirmation_waits_for_fresh_matching_status_before_enable(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    original_get_status = arm.get_arm_status
+    old_matching = original_get_status()
+    new_transition = original_get_status()
+    new_transition.timestamp = NOW
+    new_transition.msg.mode_feedback = 0
+    new_matching = original_get_status()
+    new_matching.timestamp = NOW
+    pending = [None, old_matching, new_transition, new_matching]
+
+    def get_status():
+        if pending:
+            assert "enable" not in arm.calls
+            return pending.pop(0)
+        return original_get_status()
+
+    arm.get_arm_status = get_status
+    robot._monotonic = itertools.count(100.0, 0.005).__next__
+    try:
+        robot.connect()
+        assert not pending
+        assert robot.state is PiperState.ACTIVE
+        assert arm.calls.count(("motion_mode", "J")) == 1
+        assert arm.calls.count("enable") == 1
+    finally:
+        robot.disconnect()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_stale_or_missing_mode_confirmation_never_enables(tmp_path: Path, missing):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    old = arm.get_arm_status()
+    arm.get_arm_status = lambda: None if missing else old
+    robot._monotonic = itertools.count(100.0, 0.02).__next__
+    with pytest.raises(OutcomePiperStateError, match="confirmation timed out"):
+        robot.connect()
+    assert robot.state is PiperState.FAULT
+    assert arm.calls.count(("motion_mode", "J")) == 1
+    assert "enable" not in arm.calls
+    assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
+    assert arm.gripper.commands == []
+
+
+@pytest.mark.parametrize("timestamp", [0.0, math.nan, NOW + 0.01])
+def test_invalid_mode_timestamp_fails_before_enable(tmp_path: Path, timestamp):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    status = arm.get_arm_status()
+    status.timestamp = timestamp
+    arm.get_arm_status = lambda: status
+    with pytest.raises(OutcomePiperStateError, match="timestamp"):
+        robot.connect()
+    assert "enable" not in arm.calls
+
+
+def test_mode_confirmation_does_not_accept_a_result_after_its_deadline(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    clock = [100.0]
+    robot._monotonic = lambda: clock[0]
+    original_get_status = arm.get_arm_status
+
+    def late_status():
+        clock[0] += 0.3
+        return original_get_status()
+
+    arm.get_arm_status = late_status
+    with pytest.raises(OutcomePiperStateError, match="confirmation timed out"):
+        robot.connect()
+    assert "enable" not in arm.calls
+
+
+@pytest.mark.parametrize(
+    ("status", "error_code", "expected_state"),
+    [(1, 0, PiperState.E_STOP), (5, 0, PiperState.FAULT), (0, 0x0100, PiperState.FAULT)],
+)
+def test_controller_fault_aborts_mode_confirmation(tmp_path, status, error_code, expected_state):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    arm.status = status
+    arm.error_code = error_code
+    with pytest.raises(OutcomePiperStateError, match="controller"):
+        robot.connect()
+    assert robot.state is expected_state
+    assert "enable" not in arm.calls
+    assert ("speed_percent", 5) not in arm.calls
+    assert arm.calls.count("electronic_emergency_stop") == 1
+
+
+def test_stop_request_interrupts_mode_confirmation(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+
+    def stop_while_waiting():
+        robot._emergency_stop_cause = "operator stop during connection"
+        robot._emergency_stop_requested.set()
+        return None
+
+    arm.get_arm_status = stop_while_waiting
+    with pytest.raises(OutcomePiperStateError, match="operator stop during connection"):
+        robot.connect()
+    assert robot.state is PiperState.E_STOP
+    assert "enable" not in arm.calls
+
+
+def test_wall_clock_rollback_does_not_change_receive_age(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    robot._wall_time = lambda: NOW - 1000.0
+    try:
+        robot.connect()
+        robot.send_action(valid_action())
+        assert robot.state is PiperState.ACTIVE
+    finally:
+        robot.disconnect()
+
+
+@pytest.mark.parametrize(("ctrl_mode", "mode_feedback"), [(2, 1), (7, 1), (1, 6)])
+def test_motion_session_mode_change_stops_before_next_action(tmp_path, ctrl_mode, mode_feedback):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    try:
+        robot.connect()
+        arm.ctrl_mode = ctrl_mode
+        arm.mode_feedback = mode_feedback
+        with pytest.raises(OutcomePiperStateError, match="left CAN joint position-velocity mode"):
+            robot.send_action(valid_action())
+        assert robot.state is PiperState.FAULT
+        assert arm.calls.count("electronic_emergency_stop") == 1
+        assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
+        assert arm.gripper.commands == []
+    finally:
+        robot.disconnect()
+
+
+def test_mode_change_after_confirmation_is_rejected_before_enable(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    original_get_status = arm.get_arm_status
+    reads = 0
+
+    def get_status():
+        nonlocal reads
+        reads += 1
+        status = original_get_status()
+        if reads > 1:
+            status.msg.ctrl_mode = 2
+        return status
+
+    arm.get_arm_status = get_status
+    with pytest.raises(OutcomePiperStateError, match="left CAN joint position-velocity mode"):
+        robot.connect()
+    assert "enable" not in arm.calls
+
+
+def test_read_only_observation_does_not_require_motion_mode(tmp_path: Path):
+    robot, arm, _ = make_robot(tmp_path)
+    arm.ctrl_mode = 2
+    arm.mode_feedback = 0
+    try:
+        robot.connect()
+        assert robot.get_observation() == valid_action()
+        assert "enable" not in arm.calls
+        assert "electronic_emergency_stop" not in arm.calls
+    finally:
+        robot.disconnect()
 
 
 @pytest.mark.parametrize("failed_call", ["auto_mode", "sdk_limits", "motion_mode"])
@@ -514,11 +775,11 @@ def test_motion_configure_checks_each_sdk_step_immediately(tmp_path: Path, faile
         robot.connect()
     configured = [call[0] for call in arm.calls if isinstance(call, tuple)]
     expected = {
-        "auto_mode": ["get_firmware", "init_effector", "auto_mode"],
-        "sdk_limits": ["get_firmware", "init_effector", "auto_mode", "sdk_limits"],
+        "auto_mode": ["init_effector", "get_firmware", "auto_mode"],
+        "sdk_limits": ["init_effector", "get_firmware", "auto_mode", "sdk_limits"],
         "motion_mode": [
-            "get_firmware",
             "init_effector",
+            "get_firmware",
             "auto_mode",
             "sdk_limits",
             "motion_mode",
@@ -727,7 +988,7 @@ def test_disconnect_is_serialized_after_inflight_action(tmp_path: Path):
     )
 
 
-def test_watchdog_waits_for_inflight_action_and_observes_fresh_completion(tmp_path: Path):
+def test_expired_inflight_action_does_not_send_gripper(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     robot.connect()
     arm.block_move = True
@@ -741,10 +1002,12 @@ def test_watchdog_waits_for_inflight_action_and_observes_fresh_completion(tmp_pa
     assert not robot._watchdog_stop.wait(0.1)
     arm.release_move.set()
     action_thread.join(timeout=2)
-    assert action_errors == []
-    assert robot.state is PiperState.ACTIVE
+    assert len(action_errors) == 1
+    assert "observation expired" in str(action_errors[0])
+    assert robot.state is PiperState.FAULT
+    assert arm.gripper.commands == []
     robot.disconnect()
-    assert "electronic_emergency_stop" not in arm.calls
+    assert "electronic_emergency_stop" in arm.calls
 
 
 def test_watchdog_stop_failure_is_exposed_to_the_control_loop(tmp_path: Path):
@@ -1277,7 +1540,7 @@ def test_cli_registers_plugins_and_forwards_arguments(monkeypatch):
 
 def test_record_injects_canonical_processor_into_official_recorder(monkeypatch):
     robot_config = SimpleNamespace(
-        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}
+        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}, capture_timing=object()
     )
     teleop_config = SimpleNamespace(control_hz=20)
     cfg = SimpleNamespace(
@@ -1291,21 +1554,22 @@ def test_record_injects_canonical_processor_into_official_recorder(monkeypatch):
         workflows, "_validate_workflow_configs", lambda *_: (robot_config, teleop_config)
     )
     monkeypatch.setattr(workflows, "_processor", lambda *_: sentinel)
-    import lerobot.scripts.lerobot_record as official
 
     def fake_record(received_cfg, *, teleop_action_processor):
         captured["cfg"] = received_cfg
         captured["processor"] = teleop_action_processor
         return "dataset"
 
-    monkeypatch.setattr(official, "record", fake_record)
+    from lerobot_robot_outcome_piper import recording
+
+    monkeypatch.setattr(recording, "record_with_telemetry", fake_record)
     assert workflows.record(cfg) == "dataset"
     assert captured == {"cfg": cfg, "processor": sentinel}
 
 
 def test_record_rejects_hub_push_inside_isolated_can_namespace(monkeypatch):
     robot_config = SimpleNamespace(
-        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}
+        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}, capture_timing=object()
     )
     teleop_config = SimpleNamespace(control_hz=20)
     cfg = SimpleNamespace(
@@ -1338,13 +1602,14 @@ def test_record_rejects_missing_camera_or_rate_mismatch(monkeypatch, cameras, me
         workflows.record(cfg)
 
 
-def test_record_active_robot_stops_if_teleop_connect_fails(tmp_path: Path, monkeypatch):
+def test_record_does_not_connect_robot_if_teleop_connect_fails(tmp_path: Path, monkeypatch):
     import lerobot.scripts.lerobot_record as official
 
     robot, arm, _ = make_robot(tmp_path, mode="motion")
 
     class Dataset:
         writer = None
+        root = tmp_path / "dataset"
 
         def finalize(self):
             pass
@@ -1374,7 +1639,11 @@ def test_record_active_robot_stops_if_teleop_connect_fails(tmp_path: Path, monke
     )
 
     cfg = SimpleNamespace(
-        robot=replace(robot.config, cameras={"d435": d435_config(fps=20)}),
+        robot=replace(
+            robot.config,
+            cameras={"d435": d435_config(fps=20)},
+            capture_timing=CaptureTiming(0.1, 0.1, 0.1, 0.1),
+        ),
         teleop=xbox_config(),
         dataset=DatasetConfig(),
         display_data=False,
@@ -1392,11 +1661,11 @@ def test_record_active_robot_stops_if_teleop_connect_fails(tmp_path: Path, monke
     monkeypatch.setattr(official, "log_say", lambda *args, **kwargs: None)
     monkeypatch.setattr(official, "asdict", lambda _: {})
 
-    original_record = official.record
-    monkeypatch.setattr(official, "record", original_record.__wrapped__)
+    from lerobot_robot_outcome_piper import recording
+
+    monkeypatch.setattr(recording, "validate_dataset_schema", lambda *args: None)
     with pytest.raises(OSError, match="Xbox enumeration failed"):
         workflows.record(cfg)
 
-    assert "electronic_emergency_stop" in arm.calls
-    assert robot.state is PiperState.E_STOP
-    assert arm.calls.index("electronic_emergency_stop") < arm.calls.index("disconnect")
+    assert arm.calls == []
+    assert robot.state is PiperState.DISCONNECTED

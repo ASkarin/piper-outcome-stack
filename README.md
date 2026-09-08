@@ -1,7 +1,7 @@
 # PiPER OutcomeStack
 
 PiPER OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
-evaluation, and action-outcome stack for the standard PiPER. This repository is the
+evaluation, simulation/sim2real, and action-outcome stack for the standard PiPER. This repository is the
 code and experiment-evidence source. The control repository holds the roadmap, current
 status, decisions, and canonical planning records.
 
@@ -12,8 +12,8 @@ resume framework. Use the official LeRobot lifecycle directly:
 
 - `LeRobotDataset` v3 for recording, finalization, reload, and replay;
 - `piper-outcome-stack record` and `piper-outcome-stack teleoperate` for Xbox workflows,
-  delegating lifecycle management to official LeRobot while injecting the required action
-  processor; `lerobot-replay` remains the direct replay entry point;
+  using official loops/Dataset APIs with the required action processor and per-row
+  telemetry sidecars; `lerobot-replay` remains the direct replay entry point;
 - `lerobot-train` for ACT/SmolVLA training and checkpoint resume;
 - Hugging Face revisions plus the promoted cross-host artifact boundary for published
   datasets and models.
@@ -36,7 +36,8 @@ Fault codes, receive frequencies, and timestamps remain telemetry rather than po
 state. The plugin uses only the commit-pinned official `pyAgxArm` SDK. It does not use a
 second robot backend, ROS control path, or runtime fallback.
 
-The unique highest-privilege administrator runs the plugin directly from an immutable
+The administrator may debug hardware from a personal editable checkout/environment.
+Formal acceptance, formal collection and reproducible experiments use an immutable
 release. The default `read_only` mode connects without enabling the arm and rejects all
 actions. `motion` additionally requires matching frozen safety and hardware-acceptance
 files bound to the exact live firmware identity. The frozen safety file also supplies
@@ -45,6 +46,11 @@ watchdog, command, device-disconnect, and hold-to-run release faults issue the
 hardware-validated electronic emergency stop and latch the session; a new motion
 session is required after operator intervention. Disconnect does not home, reset, or
 disable the arm.
+
+Motion waits for fresh CAN/J mode confirmation before enable and checks that mode on
+subsequent feedback. Firmware must also match the pinned PiPER kinematic model
+(S-V1.6-3 or later). See the [official-source comparison](docs/operations/piper_integration_sources.md)
+for how the printed manual's SDK/ROS examples apply to this project.
 
 There is no runtime account, Unix socket, operator permit, resident control service, or
 mock control path. Collaborators cannot enter the target real-CAN namespace, bind its
@@ -56,14 +62,22 @@ training, evaluation, host permissions, immutable releases, and real validation
 evidence. The single D435 uses LeRobot's RealSense implementation, its inspected numeric
 serial, and explicit RGB resolution/fps. Depth is inspected and calibrated separately;
 the first ACT/SmolVLA/outcome-model input uses RGB and the seven state values. Robot-only
-bring-up may omit the camera; recording requires it and matching camera/Dataset/Xbox fps.
+bring-up may omit the camera; recording requires it, matching camera/Dataset/Xbox fps
+and measured `robot.capture_timing` values.
 See [acceptance instructions](docs/operations/piper_bringup.md). Xbox GUID, axes, directions, trigger endpoints,
 deadzone, control rate, step limits, workspace, and safety limits have no guessed
 defaults and must be frozen after hardware acceptance.
 
+For daily development, run `uv sync --frozen --extra local-controller --group dev`
+once in the personal controller checkout; ordinary source edits then need only a
+debug-process restart. Run the private `.venv/bin` command through `piper-socketcan exec`
+when CAN access is needed, using the absolute path. Keep Git baseline/diff, any untracked
+source used, interpreter, command and configuration with debug output. Release only at
+stable milestones; the same hardware and motion gates apply during development.
+
 The arm and camera have arrived (user confirmation, 2026-09-06); actual hardware gates
-remain unverified. Mode-feedback confirmation and persisted image/state/action timing remain acceptance blockers as
-described in the bring-up instructions. Run the doctor with the inspected
+are tracked separately from software readiness. The read-only SDK identity probe passed;
+five development-plugin read-only sessions and basic joint/gripper commissioning subsequently passed. Formal stop protection and real image/state/action timing acceptance remain open as described in the planning status. Run the doctor with the inspected
 `PIPER_D435_SERIAL`; both video and USB nodes require permission verification.
 
 ## Commands and verification
@@ -71,6 +85,7 @@ described in the bring-up instructions. Run the doctor with the inspected
 ```bash
 piper-outcome-stack doctor --root .
 piper-outcome-stack robot doctor
+piper-outcome-stack audit-dataset --root <dataset-root> --repo-id <exact-repo-id>
 piper-outcome-stack teleoperate --robot.type=outcome_piper --teleop.type=outcome_piper_xbox ...
 piper-outcome-stack record --robot.type=outcome_piper --teleop.type=outcome_piper_xbox \
   --dataset.push_to_hub=false ...
@@ -90,3 +105,17 @@ The fixed real-CAN namespace has no veth/NAT. `record` therefore requires
 The supported remote training environment is under `infra/container/`; the local
 controller deployment is under `infra/local-controller/`. Raw data, videos,
 checkpoints, and model weights must not enter Git.
+
+## Simulation / sim2real planning (2026-09-08)
+
+Simulation is now a core workstream with equal priority to ACT: model alignment, motion reproduction, a simulated reaching policy tested on the real arm, then task-A ACT comparisons (real-only, sim-only, sim-pretrained plus the same real subset). MuJoCo is the planned starting point, using the pinned official PiPER geometry. No simulator version, code, assets or environment has been installed/implemented by this documentation change.
+
+The user explicitly deferred implementation approval. Proposed `src/piper_outcome_stack/sim/`, `sim2real/`, `assets/piper/` and simulation/experiment configuration directories are designs, not existing runtime paths. ROS is not added to the control path; public task-A/B observations and actions retain one RGB image and seven rad/m values. Synthetic provenance cannot masquerade as physical SDK telemetry.
+
+See [planning amendment](docs/preregistration/PR-20260908-01.md). The canonical workstream and schedule live in the planning repository at `docs/roadmap/piper_sim2real_workstream.md`. The repaired source now binds `configs/project.json` to PR-20260908-01. Original preregistration snapshots and old releases retain their historical identities; the source change does not implement simulation. This document is not evidence of simulation or real-policy completion.
+
+## Existing-stack repair and synchronization
+
+The JSON configuration uses string annotations with explicit allowed-value checks, compatible with the pinned draccus decoder. Real CLI parsing regressions cover record and teleoperate. Motor enable sends once and waits for all six fresh driver flags instead of interpreting the SDK cached return as an acknowledgement.
+
+The maintained operator commissioning entry is `infra/acceptance/piper_joint_commission.py`, with `piper_motion_preflight.py` for read-only controller limits. The earlier J1-only script remains in diagnostic artifacts, not as another active entry. Commissioning is separate from the formal Robot gate and does not start on import or synchronize.

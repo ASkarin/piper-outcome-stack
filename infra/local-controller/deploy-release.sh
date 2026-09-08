@@ -166,6 +166,13 @@ PIPER_RUNTIME_PLUGIN_DISCOVERY
         PYTEST_ADDOPTS="-p no:cacheprovider" \
         "${acceptance_python}" -m pytest --quiet \
         "${release}/tests/test_plugin.py" \
+        "${release}/tests/test_cli_config.py" \
+        "${release}/tests/test_joint_commission.py" \
+        "${release}/tests/test_motion_preflight.py" \
+        "${release}/tests/test_capture_timing.py" \
+        "${release}/tests/test_recording_telemetry.py" \
+        "${release}/tests/test_piper_read_only_cycles.py" \
+        "${release}/tests/test_piper_read_only_probe.py" \
         "${release}/tests/test_local_controller_policy.py"
 
     local dataset_replay_root=${acceptance_temporary}/dataset-replay
@@ -274,6 +281,13 @@ summary = {
             "status": "passed",
             "tests": [
                 "tests/test_plugin.py",
+                "tests/test_cli_config.py",
+                "tests/test_joint_commission.py",
+                "tests/test_motion_preflight.py",
+                "tests/test_capture_timing.py",
+                "tests/test_recording_telemetry.py",
+                "tests/test_piper_read_only_cycles.py",
+                "tests/test_piper_read_only_probe.py",
                 "tests/test_local_controller_policy.py",
             ],
         },
@@ -367,7 +381,9 @@ PIPER_VERIFY_ACCEPTANCE
 case "${action}" in
     install)
         source_root=${2:-}
-        [[ -d "${source_root}/.git" ]] || fail "source must be a Git checkout"
+        [[ -e "${source_root}/.git" ]] && \
+            [[ "$(git_source rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || \
+            fail "source must be a Git checkout"
         git_source diff --quiet || fail "source worktree is dirty"
         git_source diff --cached --quiet || fail "source index is dirty"
         [[ -z "$(git_source status --porcelain --untracked-files=all)" ]] || \

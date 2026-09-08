@@ -5,28 +5,26 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 from lerobot.cameras.configs import CameraConfig, ColorMode
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
 from lerobot.robots.config import RobotConfig
 from lerobot.teleoperators.config import TeleoperatorConfig
 
-
-Firmware = Literal["default", "v183", "v188", "v189"]
-ExecutionMode = Literal["read_only", "motion"]
+from .timing import CaptureTiming
 
 
 @RobotConfig.register_subclass("outcome_piper")
 @dataclass(kw_only=True)
 class OutcomePiperConfig(RobotConfig):
     can_interface: str
-    firmware: Firmware
+    firmware: str
     feedback_timeout_s: float
-    execution_mode: ExecutionMode = "read_only"
+    execution_mode: str = "read_only"
     safety_path: Path | None = None
     hardware_acceptance_path: Path | None = None
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    capture_timing: CaptureTiming | None = None
     id: str = "outcome_piper"
 
     def __post_init__(self) -> None:
@@ -47,6 +45,10 @@ class OutcomePiperConfig(RobotConfig):
             self.safety_path = Path(self.safety_path)
         if self.hardware_acceptance_path is not None:
             self.hardware_acceptance_path = Path(self.hardware_acceptance_path)
+        if isinstance(self.capture_timing, dict):
+            self.capture_timing = CaptureTiming(**self.capture_timing)
+        if self.execution_mode == "motion" and self.cameras and self.capture_timing is None:
+            raise ValueError("motion with d435 requires measured capture_timing")
         if self.cameras:
             if set(self.cameras) != {"d435"}:
                 raise ValueError("the only camera observation is a single 'd435'")

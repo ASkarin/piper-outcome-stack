@@ -5,15 +5,16 @@ from __future__ import annotations
 import math
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from functools import cached_property
 from typing import Any, Callable, Mapping
 
-from lerobot.cameras.utils import make_cameras_from_configs
 from lerobot.robots.robot import Robot
 
+from .camera import make_timed_cameras
 from .config import OutcomePiperConfig
+from .timing import FeedbackReceiver
 from .errors import OutcomePiperStateError, OutcomePiperValidationError
 from .input_safety import register_active_motion_session
 from .processor import OutcomePiperAction
@@ -42,6 +43,7 @@ _TERMINAL_STATES = frozenset({PiperState.FAULT, PiperState.E_STOP})
 @dataclass(frozen=True)
 class FeedbackTelemetry:
     timestamp_s: float
+    received_monotonic_s: tuple[float, float, float, float, float]
     joint_group_timestamps_s: tuple[float, float, float]
     joint_group_hz: tuple[float, float, float]
     arm_status_timestamp_s: float
@@ -64,9 +66,10 @@ class OutcomePiper(Robot):
         config: OutcomePiperConfig,
         *,
         piper_factory: PiperFactory = create_piper,
-        camera_factory: Callable[[dict[str, Any]], dict[str, Any]] = make_cameras_from_configs,
+        camera_factory: Callable[[dict[str, Any]], dict[str, Any]] = make_timed_cameras,
         monotonic: Callable[[], float] = time.monotonic,
         wall_time: Callable[[], float] = time.time,
+        receiver_factory: Callable = FeedbackReceiver,
     ) -> None:
         super().__init__(config)
         self.config = config
@@ -74,6 +77,11 @@ class OutcomePiper(Robot):
         self._camera_factory = camera_factory
         self._monotonic = monotonic
         self._wall_time = wall_time
+        self._receiver_factory = receiver_factory
+        self._receiver = None
+        self.last_observation_telemetry = None
+        self.last_action_telemetry = None
+        self._observation_sequence = 0
         self._arm: Any | None = None
         self._gripper: Any | None = None
         self.cameras: dict[str, Any] = {}
@@ -177,25 +185,62 @@ class OutcomePiper(Robot):
             self._raise_if_comm_error("disable automatic motion-mode switching")
             self._arm.set_joint_limits_enabled(False)
             self._raise_if_comm_error("disable SDK joint limits")
+            mode_requested_at_s = self._monotonic()
             self._arm.set_motion_mode(self._arm.OPTIONS.MOTION_MODE.J)
             self._raise_if_comm_error("set joint position-velocity mode")
-            self._confirm_motion_mode_locked()
+            self._confirm_motion_mode_locked(mode_requested_at_s)
             self._arm.set_speed_percent(self._safety.motion_speed_percent)
             self._raise_if_comm_error("set frozen motion speed")
 
-    def _confirm_motion_mode_locked(self) -> None:
+    def _confirm_motion_mode_locked(self, requested_at_s: float) -> None:
+        """Wait for receive-time CAN/J confirmation after one mode request."""
         assert self._arm is not None
-        status = self._arm.get_arm_status()
-        self._raise_if_comm_error("confirm joint position-velocity mode")
-        if status is None:
-            raise OutcomePiperStateError("motion-mode feedback is missing")
+        deadline = self._monotonic() + self.config.feedback_timeout_s
+        last_feedback = "no status received"
+        while self._monotonic() < deadline:
+            self._raise_if_emergency_stop_requested_locked()
+            status, received_s = self._receiver.status()
+            self._raise_if_comm_error("confirm joint position-velocity mode")
+            if status is not None:
+                ctrl_mode, mode_feedback, _, _ = self._controller_status(status)
+                timestamp_s = float(status.timestamp)
+                if not math.isfinite(timestamp_s) or timestamp_s <= 0:
+                    raise OutcomePiperStateError("motion-mode SDK timestamp is invalid")
+                now_s = self._monotonic()
+                if now_s < requested_at_s or (received_s is not None and received_s > now_s):
+                    raise OutcomePiperStateError("motion-mode monotonic timestamp is invalid")
+                last_feedback = (
+                    f"ctrl_mode=0x{ctrl_mode:02x}, mode_feedback=0x{mode_feedback:02x}, "
+                    f"timestamp_s={timestamp_s}"
+                )
+                if (
+                    received_s is not None
+                    and received_s >= requested_at_s
+                    and ctrl_mode == 0x01
+                    and mode_feedback == 0x01
+                    and self._monotonic() < deadline
+                ):
+                    return
+            remaining = deadline - self._monotonic()
+            if remaining > 0:
+                self._emergency_stop_requested.wait(min(0.005, remaining))
+        raise OutcomePiperStateError(
+            f"motion-mode feedback confirmation timed out: {last_feedback}"
+        )
+
+    def _controller_status(self, status: Any) -> tuple[int, int, int, int]:
         ctrl_mode = int(status.msg.ctrl_mode)
         mode_feedback = int(status.msg.mode_feedback)
-        if ctrl_mode != 0x01 or mode_feedback != 0x01:
-            raise OutcomePiperStateError(
-                "motion-mode feedback mismatch: "
-                f"ctrl_mode=0x{ctrl_mode:02x}, mode_feedback=0x{mode_feedback:02x}"
+        arm_status = int(status.msg.arm_status)
+        arm_error_code = int(status.msg.err_code)
+        if arm_status == 1:
+            self._latch(PiperState.E_STOP, "controller reports emergency stop")
+        if arm_status != 0 or arm_error_code != 0:
+            self._latch(
+                PiperState.FAULT,
+                f"controller arm_status={arm_status}, err_code=0x{arm_error_code:04x}",
             )
+        return ctrl_mode, mode_feedback, arm_status, arm_error_code
 
     @staticmethod
     def _cause_text(cause: BaseException | str) -> str:
@@ -334,6 +379,13 @@ class OutcomePiper(Robot):
                 arm.connect()
                 self._arm = arm
                 self._raise_if_comm_error("connect")
+                self._gripper = arm.init_effector(arm.OPTIONS.EFFECTOR.AGX_GRIPPER)
+                self._receiver = self._receiver_factory(
+                    arm, self._gripper, lambda: self._monotonic()
+                )
+                # Cold-start readiness is separate from runtime staleness. No requests
+                # are resent; a quiet bus may still answer the single firmware query.
+                self._receiver.wait_ready(self.config.feedback_timeout_s)
                 live_firmware = arm.get_firmware(
                     timeout=self.config.feedback_timeout_s,
                     min_interval=0.0,
@@ -355,7 +407,8 @@ class OutcomePiper(Robot):
                         live_firmware,
                         firmware=self.config.firmware,
                     )
-                self._gripper = arm.init_effector(arm.OPTIONS.EFFECTOR.AGX_GRIPPER)
+                if not self._receiver.wait_ready(self.config.feedback_timeout_s):
+                    raise OutcomePiperStateError("initial complete feedback timed out")
                 self.configure()
                 for camera in cameras.values():
                     camera.connect()
@@ -363,9 +416,11 @@ class OutcomePiper(Robot):
                 self._state = PiperState.CONNECTED_DISABLED
                 self.get_observation()
                 if self.config.execution_mode == "motion":
-                    if not arm.enable():
-                        raise OutcomePiperStateError("PiPER enable did not confirm all joints")
+                    enable_requested_s = self._monotonic()
+                    # The SDK returns cached flags immediately after sending once.
+                    arm.enable()
                     self._raise_if_comm_error("enable")
+                    self._confirm_enabled_locked(enable_requested_s)
                     self._state = PiperState.ACTIVE
                     self._last_action_at = self._monotonic()
                     self._start_watchdog()
@@ -378,6 +433,7 @@ class OutcomePiper(Robot):
                 if arm.is_connected():
                     arm.disconnect()
                 self._arm = None
+                self._receiver = None
                 self._gripper = None
                 self.cameras = {}
                 message = self._latched_message()
@@ -385,20 +441,32 @@ class OutcomePiper(Robot):
                     raise
                 raise OutcomePiperStateError(message) from exc
 
-    def _joint_frames(self) -> tuple[Any, Any, Any]:
-        assert self._arm is not None
-        parser = self._arm._parser
-        frames = tuple(getattr(parser, name, None) for name in ("joint_12", "joint_34", "joint_56"))
-        if any(frame is None for frame in frames):
-            self._latch(PiperState.FAULT, "incomplete joint feedback groups")
-        return frames
-
-    def _frame_frequency(self, frame: Any) -> float:
-        assert self._arm is not None
-        value = float(self._arm._ctx.fps.get_fps(frame.msg_type))
-        if not math.isfinite(value) or value < 0:
-            self._latch(PiperState.FAULT, "invalid joint feedback frequency")
-        return value
+    def _confirm_enabled_locked(self, requested_s: float) -> None:
+        deadline = requested_s + self.config.feedback_timeout_s
+        while self._monotonic() < deadline:
+            self._raise_if_emergency_stop_requested_locked()
+            self._feedback()
+            states = self._receiver.driver_states()
+            now = self._monotonic()
+            if now < requested_s:
+                raise OutcomePiperStateError("enable confirmation monotonic clock moved backwards")
+            confirmed = len(states) == 6
+            for state, received_s in states:
+                if state is None or received_s is None:
+                    confirmed = False
+                    continue
+                if not math.isfinite(received_s) or received_s < 0 or received_s > now:
+                    raise OutcomePiperStateError("invalid enable feedback receive timestamp")
+                if state.msg.foc_status.driver_error_status:
+                    raise OutcomePiperStateError("driver fault during enable confirmation")
+                if received_s < requested_s or not state.msg.foc_status.driver_enable_status:
+                    confirmed = False
+            if confirmed and self._monotonic() < deadline:
+                return
+            remaining = deadline - self._monotonic()
+            if remaining > 0:
+                self._emergency_stop_requested.wait(min(0.005, remaining))
+        raise OutcomePiperStateError("enable confirmation timed out; no command was resent")
 
     def _feedback(self) -> tuple[list[float], float]:
         if self._state in _TERMINAL_STATES:
@@ -422,13 +490,12 @@ class OutcomePiper(Robot):
         if not self.is_connected:
             raise OutcomePiperStateError("PiPER is not connected")
         self._raise_if_comm_error("feedback read")
-        joints = self._arm.get_joint_angles()
-        gripper = self._gripper.get_gripper_status()
-        status = self._arm.get_arm_status()
+        snapshot = self._receiver.snapshot()
+        joints, gripper, status = snapshot.joints, snapshot.gripper, snapshot.status
         self._raise_if_comm_error("feedback read")
         if joints is None or gripper is None or status is None:
             self._latch(PiperState.FAULT, "missing arm, status, or gripper feedback")
-        frames = self._joint_frames()
+        frames = snapshot.frames
         values = [float(item) for item in joints.msg]
         width = float(gripper.msg.value)
         if len(values) != 6 or not all(math.isfinite(item) for item in (*values, width)):
@@ -441,29 +508,34 @@ class OutcomePiper(Robot):
                 PiperState.FAULT,
                 f"gripper fault status_code=0x{gripper_status_code:02x}",
             )
-        arm_status = int(status.msg.arm_status)
-        arm_error_code = int(status.msg.err_code)
-        ctrl_mode = int(status.msg.ctrl_mode)
-        mode_feedback = int(status.msg.mode_feedback)
-        if arm_status == 1:
-            self._latch(PiperState.E_STOP, "controller reports emergency stop")
-        if arm_status != 0 or arm_error_code != 0:
+        ctrl_mode, mode_feedback, arm_status, arm_error_code = self._controller_status(status)
+        if self.config.execution_mode == "motion" and (ctrl_mode != 0x01 or mode_feedback != 0x01):
             self._latch(
                 PiperState.FAULT,
-                f"controller arm_status={arm_status}, err_code=0x{arm_error_code:04x}",
+                "controller left CAN joint position-velocity mode: "
+                f"ctrl_mode=0x{ctrl_mode:02x}, mode_feedback=0x{mode_feedback:02x}",
             )
         joint_timestamps = tuple(float(frame.timestamp) for frame in frames)
         gripper_timestamp = float(gripper.timestamp)
         timestamps = (*joint_timestamps, float(status.timestamp), gripper_timestamp)
         if not all(math.isfinite(value) and value > 0 for value in timestamps):
             self._latch(PiperState.FAULT, "feedback timestamps are missing or invalid")
-        now = self._wall_time()
-        if any(timestamp > now for timestamp in timestamps):
-            self._latch(PiperState.FAULT, "feedback timestamp is in the future")
-        age = max(now - timestamp for timestamp in timestamps)
+        now = self._monotonic()
+        received = snapshot.received_s
+        if not math.isfinite(now) or any(
+            not math.isfinite(t) or t < 0 or t > now for t in received
+        ):
+            self._latch(
+                PiperState.FAULT, "feedback monotonic timestamp is invalid or in the future"
+            )
+        age = max(now - t for t in received)
         if age > self.config.feedback_timeout_s:
             self._latch(PiperState.FAULT, f"feedback is stale by {age:.6f}s")
-        joint_hz = tuple(self._frame_frequency(frame) for frame in frames)
+        if self.config.capture_timing is not None:
+            skew = max(received[:3]) - min(received[:3])
+            if skew > self.config.capture_timing.joint_max_skew_s:
+                self._latch(PiperState.FAULT, "joint feedback group skew exceeds capture_timing")
+        joint_hz = snapshot.joint_hz
         arm_status_hz = float(status.hz)
         gripper_hz = float(gripper.hz)
         if not all(
@@ -472,6 +544,7 @@ class OutcomePiper(Robot):
             self._latch(PiperState.FAULT, "feedback frequency is missing or invalid")
         self._last_feedback = FeedbackTelemetry(
             timestamp_s=min(timestamps),
+            received_monotonic_s=received,
             joint_group_timestamps_s=joint_timestamps,
             joint_group_hz=joint_hz,
             arm_status_timestamp_s=float(status.timestamp),
@@ -488,17 +561,60 @@ class OutcomePiper(Robot):
 
     def get_observation(self) -> dict[str, Any]:
         with self._command_lock:
-            joints, width = self._feedback()
-            observation: dict[str, Any] = {
-                **{key: value for key, value in zip(JOINT_KEYS, joints, strict=True)},
-                "gripper.pos": width,
-            }
+            self.last_action_telemetry = None
+            if not self.is_connected:
+                raise OutcomePiperStateError("PiPER is not connected")
             try:
+                images = {}
+                camera_metadata = {}
                 for name, camera in self.cameras.items():
-                    observation[name] = camera.async_read()
+                    frame, metadata = camera.read_with_metadata(self.config.feedback_timeout_s)
+                    images[name] = frame
+                    camera_metadata[name] = asdict(metadata)
+                joints, width = self._feedback()
+                now = self._monotonic()
+                received = self._last_feedback.received_monotonic_s
+                ages = [now - t for t in received]
+                timing = self.config.capture_timing
+                for metadata in camera_metadata.values():
+                    camera_t = metadata["received_monotonic_s"]
+                    age = now - camera_t
+                    if not math.isfinite(age) or age < 0:
+                        raise OutcomePiperStateError("camera monotonic timestamp is invalid")
+                    ages.append(age)
+                    if timing is not None:
+                        if age > timing.camera_max_age_s:
+                            raise OutcomePiperStateError("camera frame is stale")
+                        if max(abs(camera_t - t) for t in received) > timing.image_state_max_skew_s:
+                            raise OutcomePiperStateError("image-state skew exceeds capture_timing")
+                self._observation_sequence += 1
+                self.last_observation_telemetry = {
+                    "sequence": self._observation_sequence,
+                    "observed_monotonic_s": now,
+                    "oldest_received_monotonic_s": now - max(ages),
+                    "feedback": asdict(self._last_feedback),
+                    "cameras": camera_metadata,
+                    "quality": "checked" if timing is not None else "measurement_only",
+                }
+                return {
+                    **dict(zip(JOINT_KEYS, joints, strict=True)),
+                    "gripper.pos": width,
+                    **images,
+                }
             except Exception as exc:
                 self._latch(PiperState.FAULT, exc)
-            return observation
+
+    def _check_observation_age(self):
+        if self.last_observation_telemetry is None:
+            self._latch(PiperState.FAULT, "action requires an observation")
+        age = self._monotonic() - self.last_observation_telemetry["oldest_received_monotonic_s"]
+        limit = (
+            self.config.capture_timing.observation_max_age_s
+            if self.config.capture_timing is not None
+            else self.config.feedback_timeout_s
+        )
+        if not math.isfinite(age) or age < 0 or age > limit:
+            self._latch(PiperState.FAULT, "observation expired before SDK command")
 
     def _validate_action(self, action: Mapping[str, Any]) -> tuple[list[float], float]:
         if set(action) != set(ACTION_KEYS):
@@ -557,27 +673,61 @@ class OutcomePiper(Robot):
             if self.config.execution_mode != "motion":
                 raise OutcomePiperStateError("send_action requires execution_mode=motion")
             self._require_active_locked("send_action")
+            self.last_action_telemetry = {
+                "observation_sequence": self.last_observation_telemetry["sequence"]
+                if self.last_observation_telemetry
+                else None,
+                "generated_monotonic_s": getattr(action, "generated_monotonic_s", None),
+                "dispatch_monotonic_s": self._monotonic(),
+                "commands": [],
+                "result": "rejected",
+            }
             joints, gripper = self._validate_action(action)
             if type(action) is OutcomePiperAction and action.execute_motion is False:
                 self._latch(PiperState.E_STOP, "hold-to-run was released")
+            command = None
             try:
                 self._require_active_locked("move_j")
                 assert self._arm is not None
+                self._check_observation_age()
+                command = {
+                    "name": "move_j",
+                    "started_monotonic_s": self._monotonic(),
+                    "result": "failed",
+                }
+                self.last_action_telemetry["commands"].append(command)
                 self._arm.move_j(joints)
                 self._raise_if_comm_error("move_j")
+                command.update(ended_monotonic_s=self._monotonic(), result="sdk_returned")
             except Exception as exc:
+                if command is not None:
+                    command["ended_monotonic_s"] = self._monotonic()
                 self._latch(PiperState.FAULT, exc)
             self._raise_if_emergency_stop_requested_locked()
+            command = None
             try:
                 self._require_active_locked("gripper command")
                 assert self._gripper is not None
                 assert self._safety is not None
+                self._check_observation_age()
+                command = {
+                    "name": "move_gripper_m",
+                    "started_monotonic_s": self._monotonic(),
+                    "result": "failed",
+                }
+                self.last_action_telemetry["commands"].append(command)
                 self._gripper.move_gripper_m(gripper, force=self._safety.gripper_force_n)
                 self._raise_if_comm_error("gripper command")
+                command.update(ended_monotonic_s=self._monotonic(), result="sdk_returned")
             except Exception as exc:
+                if command is not None:
+                    command["ended_monotonic_s"] = self._monotonic()
                 self._latch(PiperState.E_STOP, exc)
             self._raise_if_emergency_stop_requested_locked()
             self._last_action_at = self._monotonic()
+            self.last_action_telemetry.update(
+                result="sdk_returned", values={key: float(action[key]) for key in ACTION_KEYS}
+            )
             return {key: float(action[key]) for key in ACTION_KEYS}
 
     def _require_active_locked(self, operation: str) -> None:
@@ -613,6 +763,7 @@ class OutcomePiper(Robot):
                         first_error = first_error or exc
                 self.cameras = {}
                 self._arm = None
+                self._receiver = None
                 self._gripper = None
                 if first_error is not None:
                     raise first_error

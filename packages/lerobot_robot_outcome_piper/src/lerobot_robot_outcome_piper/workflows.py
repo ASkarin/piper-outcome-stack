@@ -104,7 +104,7 @@ def teleoperate(cfg: Any) -> None:
 def record(cfg: Any) -> Any:
     """Call the official recorder with the canonical Xbox processor."""
 
-    from lerobot.scripts import lerobot_record as official
+    from .recording import record_with_telemetry
 
     robot_config, teleop_config = _validate_workflow_configs(cfg.robot, cfg.teleop)
     if cfg.dataset.fps != teleop_config.control_hz:
@@ -118,8 +118,10 @@ def record(cfg: Any) -> Any:
         raise ValueError("record requires the single d435 RGB camera")
     if robot_config.cameras["d435"].fps != cfg.dataset.fps:
         raise ValueError("dataset fps must match the verified d435 fps")
+    if robot_config.capture_timing is None:
+        raise ValueError("record requires measured capture_timing")
     with motion_input_safety_scope():
-        return official.record(
+        return record_with_telemetry(
             cfg,
             teleop_action_processor=_processor(robot_config, teleop_config),
         )

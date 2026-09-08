@@ -38,8 +38,12 @@ sudo --preserve-env=PIPER_PYPI_MIRROR \
 The release sync installs the workspace `lerobot_robot_outcome_piper` distribution and
 the public HTTPS, commit-pinned LeRobot and pyAgxArm dependencies from `uv.lock`. It does
 not require a deploy key, SSH wrapper, private adapter repository, or source copy outside
-the immutable release. The administrator develops in a personal clone, but real control, data
-collection, and policy execution use the immutable release. Run Python as the
+the immutable release. The administrator may also run hardware debugging from a personal
+clone with `uv sync --frozen --extra local-controller --group dev` and its private editable
+environment. Source-only edits require a process restart, not a release. Formal acceptance,
+formal collection and reproducible experiments use the immutable release. Keep development
+baseline/diff, untracked source used, interpreter, command and config with debug outputs;
+the same device and motion gates apply. Run Python as the
 administrator, not root; use sudo only for drivers, udev/ACL, SocketCAN, and deployment
 administration.
 
