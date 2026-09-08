@@ -97,7 +97,7 @@ def test_release_captures_once_retains_grasp_and_resumes_from_feedback(session):
     arm.joints = [0.008] * 6
     arm.gripper.width = 0.02  # Measured opening must not replace the grasp command.
     tick(session, False, True)
-    captured = robot._hold_target[:]
+    captured = robot._hold_window.target[:]
     count = len(moves(arm))
     gripper_commands = arm.gripper.commands[:]
     clock.advance()
@@ -109,7 +109,7 @@ def test_release_captures_once_retains_grasp_and_resumes_from_feedback(session):
     for _ in range(4):
         clock.advance()
         tick(session)
-    assert len(moves(arm)) == count and robot._hold_target == captured
+    assert len(moves(arm)) == count and robot._hold_window.target == captured
     tick(session, True, True, {**valid_action(0.009, 0.035)})
     assert control.state is TeleopState.RUNNING
     assert arm.gripper.commands == gripper_commands
@@ -119,23 +119,23 @@ def test_release_captures_once_retains_grasp_and_resumes_from_feedback(session):
 def test_transient_drift_resets_stable_window_not_target_or_deadline(session):
     robot, arm, control, clock = session
     tick(session)
-    deadline = robot._hold_deadline
-    target = robot._hold_target[:]
+    deadline = robot._hold_window.deadline
+    target = robot._hold_window.target[:]
     clock.advance(0.005)
     arm.joints = [0.011] * 6
     tick(session)
-    assert not control.hold_confirmed and robot._hold_deadline == deadline
+    assert not control.hold_confirmed and robot._hold_window.deadline == deadline
     clock.advance(0.005)
     arm.joints = [0.0] * 6
     tick(session)
     clock.advance(0.011)
     tick(session)
-    assert control.hold_confirmed and robot._hold_target == target and len(moves(arm)) == 1
+    assert control.hold_confirmed and robot._hold_window.target == target and len(moves(arm)) == 1
     arm.joints = [0.011] * 6
     clock.advance()
     tick(session)
     assert control.state is TeleopState.HOLD_REQUESTED
-    assert robot._hold_target == target and len(moves(arm)) == 1
+    assert robot._hold_window.target == target and len(moves(arm)) == 1
 
 
 def test_hold_timeout_emergency_stops_once_without_disable_or_reset(session):

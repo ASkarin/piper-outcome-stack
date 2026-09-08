@@ -92,3 +92,35 @@ in-flight SDK interruption, B, retained grasp, stop failures and official
 record/finalize/reload/replay with rerecord/resume. Hardware mapping, unloaded/loaded
 hold, disconnect and recovery remain separate pending acceptance items. This change
 does not activate a release or authorize real teleoperation.
+
+## Restricted release/resume commissioning
+
+`infra/acceptance/piper_xbox_hold_commission.py` uses the same `JointHold` and
+`TeleopControl` as the Robot plugin, through the existing `JointRun` read/dispatch
+checks. It is a bounded operator commissioning case, not another robot backend or
+an override of the formal Robot gate. It accepts a completed read-only reference,
+a completed initial hold report, and the measured Xbox mapping.
+
+This case requires the already-enabled CAN/J pose from the hold report. After one
+operator confirmation, it closes the empty gripper to 0 mm / 1 N and establishes
+initial hold. With sticks/triggers neutral, a fresh shoulder press sends one zero
+joint target at 1% speed. Release after movement begins and before arrival captures
+one fixed holding target. New received feedback must confirm it before a neutral
+release/press can resume the zero target. Completion requires both an observed
+mid-movement release and resumed arrival, followed by final hold confirmation.
+Releasing before any measured movement, or only after arrival, does not pass.
+
+The case reuses commissioning tolerance 0.1 degree, stable time 0.3 s, timeout 10 s,
+feedback age 0.2 s and maximum joint excursion 5 degrees. Deadzone 0.08 is the tested
+input candidate. These are explicit commissioning settings; no formal acceptance
+file is written. Joint/driver/gripper feedback remains checked, the hold target is
+not repeatedly updated, and pause does not rewrite the gripper command. B requests
+electronic stop. Detected input loss/loop delay holds with healthy feedback before
+faulting; failed holding takes the electronic-stop path and records unknown results.
+No automatic disable, reset, mode recovery, re-enable or retry is added.
+
+This checks a single return path and the shared primitives, not full Robot workflow,
+Cartesian IK, loaded grasp, forced-process termination, or a background watchdog.
+The operator must remain at the arm and use the existing stopping procedure;
+electronic stop can allow damped descent. All outputs and failed attempts remain
+separate from formal acceptance and training data.

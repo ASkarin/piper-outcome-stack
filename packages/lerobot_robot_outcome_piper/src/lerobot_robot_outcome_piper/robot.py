@@ -18,7 +18,7 @@ from .timing import FeedbackReceiver
 from .errors import OutcomePiperStateError, OutcomePiperValidationError
 from .input_safety import register_active_motion_session
 from .processor import OutcomePiperAction
-from .teleop_control import HoldSettings, TeleopControl, TeleopState
+from .teleop_control import HoldSettings, JointHold, TeleopControl, TeleopState
 from .safety import (
     ACTION_KEYS,
     JOINT_KEYS,
@@ -93,15 +93,11 @@ class OutcomePiper(Robot):
         self._last_control_tick_s: float | None = None
         self._teleop: TeleopControl | None = None
         self._hold_settings: HoldSettings | None = None
-        self._hold_target: list[float] | None = None
+        self._hold_window: JointHold | None = None
         self._hold_command: dict | None = None
         self._hold_id = 0
         self._hold_epoch = -1
         self._running_epoch = -1
-        self._hold_deadline = 0.0
-        self._hold_stable_since: float | None = None
-        self._hold_last_received: tuple[float, ...] | None = None
-        self._hold_feedback_after_s = 0.0
         self._last_gripper_target: float | None = None
         self._last_gripper_command: dict | None = None
         self._input_fault_requested = threading.Event()
@@ -702,14 +698,10 @@ class OutcomePiper(Robot):
             "started_monotonic_s": requested,
             "result": "failed",
         }
-        self._hold_target = list(joints)
+        self._hold_window = JointHold(joints, self._hold_settings, requested)
         self._hold_command = command
         self._hold_id += 1
         self._hold_epoch = self._teleop.epoch
-        self._hold_stable_since = None
-        self._hold_deadline = requested + self._hold_settings.timeout_s
-        self._hold_feedback_after_s = requested
-        self._hold_last_received = None
         try:
             self._arm.move_j(joints)
             self._raise_if_comm_error("hold_move_j")
@@ -722,39 +714,15 @@ class OutcomePiper(Robot):
         self._require_active_locked("confirm hold")
         self._raise_if_emergency_stop_requested_locked()
         joints, _ = self._feedback()
-        now = self._monotonic()
-        within = all(
-            abs(a - b) <= self._hold_settings.joint_tolerance_rad
-            for a, b in zip(joints, self._hold_target, strict=True)
+        confirmed = self._hold_window.observe(
+            joints, self._last_feedback.received_monotonic_s[:3], self._monotonic()
         )
-        if self._teleop.hold_confirmed:
-            if within:
-                return
+        if self._teleop.hold_confirmed and not confirmed:
             self._teleop.request_hold()
             self._hold_epoch = self._teleop.epoch
-            self._hold_deadline = now + self._hold_settings.timeout_s
-            self._hold_feedback_after_s = now
-            self._hold_last_received = None
-            self._hold_stable_since = None
-        if now >= self._hold_deadline:
-            raise OutcomePiperStateError("hold confirmation timed out")
-        received = self._last_feedback.received_monotonic_s[:3]
-        if min(received) < self._hold_feedback_after_s:
-            return
-        if self._hold_last_received is not None and any(
-            stamp <= previous
-            for stamp, previous in zip(received, self._hold_last_received, strict=True)
-        ):
-            return
-        self._hold_last_received = received
-        if within:
-            if self._hold_stable_since is None:
-                self._hold_stable_since = min(received)
-            if min(received) - self._hold_stable_since >= self._hold_settings.stable_time_s:
-                self._teleop.confirm_hold()
-                self._stop_outcome = "hold_confirmed"
-        else:
-            self._hold_stable_since = None
+        elif confirmed and not self._teleop.hold_confirmed:
+            self._teleop.confirm_hold()
+            self._stop_outcome = "hold_confirmed"
 
     def _teleop_run_allowed_locked(self, action: OutcomePiperAction) -> bool:
         self._raise_if_emergency_stop_requested_locked()
@@ -784,14 +752,11 @@ class OutcomePiper(Robot):
             joints, _ = self._feedback()
             if not self._teleop.hold_confirmed or any(
                 abs(a - b) > self._hold_settings.joint_tolerance_rad
-                for a, b in zip(joints, self._hold_target, strict=True)
+                for a, b in zip(joints, self._hold_window.target, strict=True)
             ):
                 self._teleop.request_hold()
                 self._hold_epoch = self._teleop.epoch
-                self._hold_feedback_after_s = self._monotonic()
-                self._hold_last_received = None
-                self._hold_deadline = self._hold_feedback_after_s + self._hold_settings.timeout_s
-                self._hold_stable_since = None
+                self._hold_window.restart(self._monotonic())
                 return False
             self._running_epoch = action.epoch
         return True
@@ -809,7 +774,7 @@ class OutcomePiper(Robot):
                 None
                 if self._last_gripper_target is None
                 else {
-                    **dict(zip(JOINT_KEYS, self._hold_target)),
+                    **dict(zip(JOINT_KEYS, self._hold_window.target)),
                     "gripper.pos": self._last_gripper_target,
                 }
             )
@@ -855,7 +820,7 @@ class OutcomePiper(Robot):
                     if self._teleop.hold_confirmed:
                         break
                     self._emergency_stop_requested.wait(
-                        min(0.005, max(0.0, self._hold_deadline - self._monotonic()))
+                        min(0.005, max(0.0, self._hold_window.deadline - self._monotonic()))
                     )
                 self._stop_outcome = "hold_confirmed"
                 self._latch_state_only(PiperState.FAULT, cause)

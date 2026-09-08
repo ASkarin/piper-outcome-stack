@@ -84,3 +84,54 @@ class TeleopControl:
     def permits(self, epoch: int) -> bool:
         with self._lock:
             return self.state is TeleopState.RUNNING and epoch == self.epoch
+
+
+class JointHold:
+    """Fixed target and receive-time stability window, shared with commissioning.
+
+    Callers validate feedback and own SDK dispatch. This class never sends commands
+    or grants hardware acceptance.
+    """
+
+    def __init__(self, target, settings: HoldSettings, requested_s: float):
+        self.target = list(target)
+        self.settings = settings
+        self.restart(requested_s)
+
+    def restart(self, now):
+        self.confirmed = False
+        self.after_s = now
+        self.deadline = now + self.settings.timeout_s
+        self.stable_since = None
+        self.last_received = None
+
+    def within(self, joints):
+        return all(
+            abs(a - b) <= self.settings.joint_tolerance_rad
+            for a, b in zip(joints, self.target, strict=True)
+        )
+
+    def observe(self, joints, received, now):
+        from .errors import OutcomePiperStateError
+
+        within = self.within(joints)
+        if self.confirmed:
+            if within:
+                return True
+            self.restart(now)
+        if now >= self.deadline:
+            raise OutcomePiperStateError("hold confirmation timed out")
+        if min(received) < self.after_s:
+            return False
+        if self.last_received is not None and any(
+            a <= b for a, b in zip(received, self.last_received, strict=True)
+        ):
+            return False
+        self.last_received = tuple(received)
+        if within:
+            if self.stable_since is None:
+                self.stable_since = min(received)
+            self.confirmed = min(received) - self.stable_since >= self.settings.stable_time_s
+        else:
+            self.stable_since = None
+        return self.confirmed
