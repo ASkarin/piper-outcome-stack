@@ -227,3 +227,33 @@ def test_command_without_dispatch_return_is_not_invented(tmp_path):
     path.write_text(json.dumps(doc))
     with pytest.raises(KeyError):
         read_record(path)
+
+
+def test_noncentral_principal_point_moves_projection_in_image_coordinates(tmp_path):
+    code = """
+import numpy as np
+import mujoco
+from piper_outcome_stack.sim.runtime import Simulation, load_config
+centres=[]
+for offset in ([0,0],[40,30]):
+    cfg=load_config()
+    cfg['camera']['principal_pixels']=(np.array(cfg['camera']['principal_pixels'])+offset).tolist()
+    sim=Simulation(cfg)
+    try:
+        sim.render()
+        sim.renderer.enable_segmentation_rendering()
+        labels=sim.renderer.render()
+        ids=[i for i in range(sim.model.ngeom) if sim.model.geom(i).name.endswith('_mesh')]
+        y,x=np.where(np.isin(labels[:,:,0],ids)&(labels[:,:,1]==int(mujoco.mjtObj.mjOBJ_GEOM)))
+        centres.append([x.mean(),y.mean()])
+    finally:
+        sim.close()
+np.testing.assert_allclose(np.subtract(centres[1],centres[0]),[40,30],atol=0.5)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "MUJOCO_GL": "egl"},
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
