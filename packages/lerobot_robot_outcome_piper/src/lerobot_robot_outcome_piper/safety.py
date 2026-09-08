@@ -112,7 +112,6 @@ def _validated_acceptance(
         "five_read_only_cycles_verified",
         "communication_loss_stop_verified",
         "watchdog_stop_verified",
-        "hold_to_run_stop_verified",
         "electronic_emergency_stop_verified",
         "no_drop_stop_verified",
         "stop_strategy_verified",

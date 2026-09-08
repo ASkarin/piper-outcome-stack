@@ -388,7 +388,6 @@ def write_gate(tmp_path: Path, *, nameplate_model="PiPER") -> tuple[Path, Path]:
                 "five_read_only_cycles_verified": True,
                 "communication_loss_stop_verified": True,
                 "watchdog_stop_verified": True,
-                "hold_to_run_stop_verified": True,
                 "teleoperation_hold": {
                     "verified": True,
                     "joint_tolerance_rad": 0.01,

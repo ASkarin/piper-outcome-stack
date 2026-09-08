@@ -40,6 +40,8 @@ approved hardware gate. No real hold parameters can be measured by an input-only
 | `hold_timeout_s` | Fixed confirmation deadline; greater than stable time |
 
 All previous measured axis, trigger, control-rate, step and IK settings remain required.
+The former generic shoulder-stop boolean is replaced by the parameter-bound Xbox hold
+acceptance below; it cannot substitute for testing the new behavior.
 Before a real Xbox connection, the existing hardware-acceptance JSON must contain
 `teleoperation_hold` with `verified: true` and the exact approved
 `joint_tolerance_rad`, `stable_time_s`, `timeout_s`. This section is written only after
