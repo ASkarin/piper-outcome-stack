@@ -84,11 +84,17 @@ class XboxHoldRun(JointRun):
         if any(abs(a - b) > TOLERANCE for a, b in zip(q, initial)):
             raise RuntimeError("pose changed during confirmation")
         self.report["operator_approved"] = True
+        if reader().emergency:
+            self.control.stop(True)
+            raise OperatorStop("B pressed at session start")
         self.send("disable_auto_mode", self.arm.set_auto_set_motion_mode_enabled, False)
         self.send("disable_sdk_clipping", self.arm.set_joint_limits_enabled, False)
         self.send("speed_percent", self.arm.set_speed_percent, 1)
         self.position_gripper(0.0, initial)
         self.window = None
+        if reader().emergency:
+            self.control.stop(True)
+            raise OperatorStop("B pressed during gripper preparation")
         self.capture()
         self.report["input_samples"] = []
         self.phase = "initial_hold"

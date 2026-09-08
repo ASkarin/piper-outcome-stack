@@ -134,3 +134,18 @@ def test_changed_start_pose_rejected_without_sends():
     with pytest.raises(RuntimeError, match="pose differs"):
         run.run_xbox(lambda: NS(emergency=False, hold=False, neutral=True), confirm=lambda _: "")
     assert not arm.moves and arm.enables == 0
+
+
+def test_b_pressed_during_confirmation_prevents_initial_commands():
+    run, arm, rx, clock = setup_case()
+    count = [0]
+
+    def read():
+        count[0] += 1
+        return NS(emergency=count[0] >= 2, hold=False, neutral=True)
+
+    with pytest.raises(OperatorStop) as error:
+        run.run_xbox(read, confirm=lambda _: "")
+    assert not arm.moves and not run.gripper.calls
+    run.stop_after_failure(error.value)
+    assert arm.stops == 1 and arm.enables == 0
