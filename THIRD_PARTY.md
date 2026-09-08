@@ -17,3 +17,12 @@ reference at `licenses/GPL-3.0-only.txt`. The exact MIT copyright and permission
 for both reference repositories are retained at `licenses/agx_arm_urdf-MIT.txt` and
 `licenses/agx_arm_ros-MIT.txt`. These files are notices only; no URDF or ROS source is
 copied into this project or installed into the runtime.
+
+## PiPER simulation resources
+
+`assets/piper/upstream` and `assets/piper/meshes` contain the standard PiPER subset
+of `agilexrobotics/agx_arm_urdf@f6642ce0d7872c686f29c99e9e10cd23d1d49313`,
+under the included MIT license (`assets/piper/LICENSE`). The deterministic MJCF
+conversion and numerical FK comparison are documented in `assets/piper/README.md`.
+MuJoCo 3.12.0 is an optional simulation dependency, distributed by the official
+Google DeepMind project under Apache-2.0; it is not a real hardware backend.

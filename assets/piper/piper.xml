@@ -1,0 +1,103 @@
+<mujoco model="piper_s0_s1">
+  <compiler angle="radian" meshdir="meshes" fusestatic="false" />
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast" />
+  <size njmax="1000" nconmax="300" />
+  <asset>
+    <mesh name="base_link" file="base_link.stl" />
+    <mesh name="link1" file="link1.stl" />
+    <mesh name="link2" file="link2.stl" />
+    <mesh name="link3" file="link3.stl" />
+    <mesh name="link4" file="link4.stl" />
+    <mesh name="link5" file="link5.stl" />
+    <mesh name="link6" file="link6.stl" />
+    <mesh name="flange_link" file="flange.stl" />
+    <mesh name="gripper_base" file="gripper_base.stl" />
+    <mesh name="gripper_link1" file="gripper_link1.stl" />
+    <mesh name="gripper_link2" file="gripper_link2.stl" />
+  </asset>
+  <worldbody>
+    <body name="base_link" pos="0 0 0" quat="1 0 0 0">
+      <inertial pos="-0.0047364116419148202 2.5682913463024699e-05 0.041451518036016002" mass="1.02" fullinertia="0.0026743299999999999 0.0028261200000000001 0.00089623999999999997 -7.3e-07 -0.00017389 3.9999999999999998e-07" />
+      <geom name="base_link_mesh" type="mesh" mesh="base_link" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+      <body name="link1" pos="0 0 0.123" quat="1 0 0 0">
+        <inertial pos="0.00032000000000000003 -0.00040999999999999999 -0.00348" mass="0.71" fullinertia="0.00050027000000000003 0.00040879000000000002 0.00045802000000000001 7.8000000000000005e-07 6.2600000000000002e-06 4.6199999999999998e-06" />
+        <geom name="link1_mesh" type="mesh" mesh="link1" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+        <joint name="joint1" type="hinge" axis="0 0 1" range="-2.6179937999999998 2.6179937999999998" limited="true" />
+        <body name="link2" pos="0 0 0" quat="0.047970957583410252 -0.047970921062382439 -0.70547769451507103 -0.70547771084752031">
+          <inertial pos="0.21851999999999999 -0.0086099999999999996 0.0012600000000000001" mass="1.16" fullinertia="0.00111915 0.067632510000000007 0.067558999999999994 0.00182916 0.00019233 7.6699999999999994e-06" />
+          <geom name="link2_mesh" type="mesh" mesh="link2" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+          <joint name="joint2" type="hinge" axis="0 0 1" range="0 3.1415926000000001" limited="true" />
+          <body name="link3" pos="0.28503000000000001 0 0" quat="0.62401599029219956 0 0 -0.78141157136277772">
+            <inertial pos="-0.019990000000000001 -0.14807999999999999 -0.00052999999999999998" mass="0.5" fullinertia="0.01347608 0.00046377000000000001 0.01363321 0.00161034 6.6000000000000003e-07 1.6199999999999999e-06" />
+            <geom name="link3_mesh" type="mesh" mesh="link3" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+            <joint name="joint3" type="hinge" axis="0 0 1" range="-2.9670597000000001 0" limited="true" />
+            <body name="link4" pos="-0.02198 -0.25074999999999997 0" quat="0.70710679065997395 0.70710677171312097 0 0">
+              <inertial pos="0.00012999999999999999 -0.00076000000000000004 -0.0039399999999999999" mass="0.38" fullinertia="0.00017844000000000001 0.00018913999999999999 0.00014613000000000001 6.1999999999999999e-07 6.7000000000000004e-07 4.0799999999999999e-06" />
+              <geom name="link4_mesh" type="mesh" mesh="link4" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+              <joint name="joint4" type="hinge" axis="0 0 1" range="-1.7453292 1.7453292" limited="true" />
+              <body name="link5" pos="0 0 0" quat="0.70710679065997395 -0.70710677171312097 0 0">
+                <inertial pos="0.00018000000000000001 -0.061039999999999997 -0.0022699999999999999" mass="0.383" fullinertia="0.0017231799999999999 0.00017935999999999999 0.0017117199999999999 2.5900000000000002e-06 9.9999999999999995e-08 9.9000000000000001e-06" />
+                <geom name="link5_mesh" type="mesh" mesh="link5" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+                <joint name="joint5" type="hinge" axis="0 0 1" range="-1.2217304 1.2217304" limited="true" />
+                <body name="link6" pos="8.8258999999999996e-05 -0.090999999999999998 0" quat="0.70710679065997395 0.70710677171312097 0 0">
+                  <inertial pos="-3.0000000000000001e-05 6.0000000000000002e-05 -0.002" mass="0.007" fullinertia="0.0015211199999999999 0.0013862600000000001 0.00031152000000000003 2.0200000000000001e-06 2.61e-06 2e-08" />
+                  <geom name="link6_mesh" type="mesh" mesh="link6" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+                  <joint name="joint6" type="hinge" axis="0 0 1" range="-2.0943950999999998 2.0943950999999998" limited="true" />
+                  <body name="flange_link" pos="0 0 0" quat="1 0 0 0">
+                    <inertial pos="0.001151691 0.00078242800000000005 0.0047980510000000002" mass="0.04" fullinertia="9.9353889999999997e-06 1.0508003e-05 1.9652872999999999e-05 0 0 0" />
+                    <geom name="flange_link_mesh" type="mesh" mesh="flange_link" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+                    <body name="gripper_base" pos="0 0 0.0044999999999999997" quat="1 0 0 0">
+                      <inertial pos="-0.00018380716223559101 8.0503315557791104e-05 0.032143668990887601" mass="0.45" fullinertia="0.00092933999999999996 0.00071447000000000004 0.00039441999999999998 3.3999999999999997e-07 -7.3799999999999996e-06 4.9999999999999998e-08" />
+                      <geom name="gripper_base_mesh" type="mesh" mesh="gripper_base" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+                      <body name="gripper_link1" pos="0 0 0.13800000000000001" quat="0.70710679065997395 0.70710677171312097 0 0">
+                        <inertial pos="0.00065123185041968004 -0.049192986913198899 0.0097225876918402496" mass="0.025" fullinertia="7.3709999999999997e-05 7.8099999999999998e-06 7.47e-05 -1.13e-06 2.1e-07 -1.3720000000000001e-05" />
+                        <geom name="gripper_link1_mesh" type="mesh" mesh="gripper_link1" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+                        <joint name="gripper_joint1" type="slide" axis="0 0 1" range="0 0.050000000000000003" limited="true" />
+                      </body>
+                      <body name="gripper_link2" pos="0 0 0.13800000000000001" quat="1.8946853330305491e-08 1.8946852822626527e-08 -0.70710677171312075 -0.70710679065997373">
+                        <inertial pos="0.00065123185041968004 -0.049192986913198899 0.0097225876918402496" mass="0.025" fullinertia="7.3709999999999997e-05 7.8099999999999998e-06 7.47e-05 -1.13e-06 2.1e-07 -1.3720000000000001e-05" />
+                        <geom name="gripper_link2_mesh" type="mesh" mesh="gripper_link2" pos="0 0 0" quat="1 0 0 0" rgba="0.25 0.3 0.34 1" />
+                        <joint name="gripper_joint2" type="slide" axis="0 0 -1" range="-0.050000000000000003 0" limited="true" />
+                      </body>
+                    </body>
+                    <site name="flange" size="0.006" rgba="1 0.2 0.1 1" />
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="base_link" body2="link1" />
+    <exclude body1="link1" body2="link2" />
+    <exclude body1="link2" body2="link3" />
+    <exclude body1="link3" body2="link4" />
+    <exclude body1="link4" body2="link5" />
+    <exclude body1="link5" body2="link6" />
+    <exclude body1="link6" body2="flange_link" />
+    <exclude body1="flange_link" body2="gripper_base" />
+    <exclude body1="gripper_base" body2="gripper_link1" />
+    <exclude body1="gripper_base" body2="gripper_link2" />
+  </contact>
+  <actuator>
+    <position name="joint1_servo" joint="joint1" kp="1" kv="1" forcerange="-100 100" forcelimited="true" />
+    <position name="joint2_servo" joint="joint2" kp="1" kv="1" forcerange="-100 100" forcelimited="true" />
+    <position name="joint3_servo" joint="joint3" kp="1" kv="1" forcerange="-100 100" forcelimited="true" />
+    <position name="joint4_servo" joint="joint4" kp="1" kv="1" forcerange="-100 100" forcelimited="true" />
+    <position name="joint5_servo" joint="joint5" kp="1" kv="1" forcerange="-100 100" forcelimited="true" />
+    <position name="joint6_servo" joint="joint6" kp="1" kv="1" forcerange="-100 100" forcelimited="true" />
+    <position name="gripper_servo" tendon="gripper_width" kp="1" kv="1" forcerange="-10 10" forcelimited="true" />
+  </actuator>
+  <tendon>
+    <fixed name="gripper_width">
+      <joint joint="gripper_joint1" coef="1" />
+      <joint joint="gripper_joint2" coef="-1" />
+    </fixed>
+  </tendon>
+  <equality>
+    <joint joint1="gripper_joint2" joint2="gripper_joint1" polycoef="0 -1 0 0 0" />
+  </equality>
+</mujoco>

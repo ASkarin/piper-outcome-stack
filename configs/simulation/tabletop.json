@@ -1,0 +1,19 @@
+{
+  "simulation_only": true,
+  "calibration_status": "illustrative_unidentified",
+  "timestep_s": 0.002,
+  "display_fps": 30,
+  "servo_frequency_hz": 2.0,
+  "base_xyz_m": [0, 0, 0],
+  "table_center_m": [0.15, 0, -0.03],
+  "table_half_size_m": [0.65, 0.45, 0.03],
+  "camera": {
+    "name": "d435",
+    "width": 640,
+    "height": 480,
+    "position_m": [0.9, -0.9, 0.9],
+    "look_at_m": [0.15, 0, 0.18],
+    "focal_pixels": [600, 600],
+    "principal_pixels": [320, 240]
+  }
+}
