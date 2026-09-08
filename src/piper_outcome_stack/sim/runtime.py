@@ -93,10 +93,10 @@ class Simulation:
             resolution=f"{camera['width']} {camera['height']}",
             sensorsize="0.0064 0.0048",
             focalpixel=fmt(camera["focal_pixels"]),
-            # Config uses image coordinates; MJCF uses offsets from image centre.
+            # Config uses top-left image coordinates; MJCF uses opposite-signed offsets.
             principalpixel=fmt(
-                np.asarray(camera["principal_pixels"])
-                - np.array([camera["width"], camera["height"]]) / 2
+                np.array([camera["width"], camera["height"]]) / 2
+                - np.asarray(camera["principal_pixels"])
             ),
         )
         visual = ET.SubElement(xml, "visual")
