@@ -119,3 +119,9 @@ See [planning amendment](docs/preregistration/PR-20260908-01.md). The canonical 
 The JSON configuration uses string annotations with explicit allowed-value checks, compatible with the pinned draccus decoder. Real CLI parsing regressions cover record and teleoperate. Motor enable sends once and waits for all six fresh driver flags instead of interpreting the SDK cached return as an acknowledgement.
 
 The maintained operator commissioning entry is `infra/acceptance/piper_joint_commission.py`, with `piper_motion_preflight.py` for read-only controller limits. The earlier J1-only script remains in diagnostic artifacts, not as another active entry. Commissioning is separate from the formal Robot gate and does not start on import or synchronize.
+
+## MuJoCo S0/S1 simulation
+
+The approved first simulation implementation is available through `piper-outcome-stack sim`: independent `.venv-sim`, the pinned standard PiPER model, geometry checks, desktop pose display, and archived-feedback / commanded-servo replay. Follow [the simulation tutorial](docs/operations/piper_simulation.md).
+
+S0/S1 uses an illustrative uncalibrated table/camera and unidentified actuator settings. Recorded feedback excursions are preserved and reported; target validation remains strict. It does not import the real robot plugin or connect to CAN/camera/gamepad, train a policy, implement S2/S3, or deploy a formal release. Earlier planning-only statements above describe the previous approval stage; this S0/S1 scope has now been explicitly approved.
