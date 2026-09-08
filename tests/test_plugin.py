@@ -389,6 +389,12 @@ def write_gate(tmp_path: Path, *, nameplate_model="PiPER") -> tuple[Path, Path]:
                 "communication_loss_stop_verified": True,
                 "watchdog_stop_verified": True,
                 "hold_to_run_stop_verified": True,
+                "teleoperation_hold": {
+                    "verified": True,
+                    "joint_tolerance_rad": 0.01,
+                    "stable_time_s": 0.01,
+                    "timeout_s": 0.1,
+                },
                 "electronic_emergency_stop_verified": True,
                 "no_drop_stop_verified": True,
                 "stop_strategy_verified": True,
@@ -1158,6 +1164,10 @@ def xbox_config(**overrides):
         "axis_left_trigger": 4,
         "axis_right_trigger": 5,
         "hold_button": 1,
+        "emergency_stop_button": 0,
+        "hold_joint_tolerance_rad": 0.01,
+        "hold_stable_time_s": 0.01,
+        "hold_timeout_s": 0.1,
         "deadzone": 0.1,
         "control_hz": 20,
         "xyz_step_m": 0.01,
@@ -1189,6 +1199,8 @@ def test_xbox_mapping_deadzone_triggers_hold_and_disconnect():
         "delta_yaw": -0.005,
         "delta_gripper": 0.004,
         "hold": True,
+        "neutral": False,
+        "emergency_stop": False,
     }
     xbox.disconnect()
     with pytest.raises(OutcomePiperStateError, match="disconnected"):
@@ -1297,6 +1309,8 @@ def test_xbox_hold_to_run_outputs_zero_motion():
         "delta_yaw": 0.0,
         "delta_gripper": 0.0,
         "hold": False,
+        "neutral": False,
+        "emergency_stop": False,
     }
 
 
@@ -1329,98 +1343,117 @@ def test_processor_hold_output_has_only_canonical_seven_fields():
             "delta_yaw": 0.0,
             "delta_gripper": 0.0,
             "hold": False,
+            "neutral": False,
+            "emergency_stop": False,
         }
     )
     assert tuple(result) == ACTION_KEYS
     assert isinstance(result, OutcomePiperAction)
-    assert result.execute_motion is False
+    assert result.intent == "hold"
 
 
-def test_hold_release_through_official_teleop_loop_latches_e_stop_before_motion(
-    tmp_path: Path, monkeypatch
-):
+def attach_hold(robot, control):
+    from lerobot_robot_outcome_piper.teleop_control import HoldSettings
+
+    settings = HoldSettings(0.01, 0.01, 0.1)
+    path = robot.config.hardware_acceptance_path
+    record = json.loads(path.read_text())
+    record["teleoperation_hold"] = {"verified": True, **vars(settings)}
+    path.write_text(json.dumps(record))
+    robot.configure_teleoperation(control, settings)
+
+
+def test_startup_wait_through_official_teleop_loop_does_not_estop(tmp_path, monkeypatch):
+    monkeypatch.setattr("lerobot_robot_outcome_piper.processor.time.monotonic", lambda: 100.0)
     from lerobot.processor import make_default_processors
     from lerobot.scripts import lerobot_teleoperate as official
 
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
     processor = workflows._processor(robot.config, xbox_config())
+    attach_hold(robot, processor.steps[0].control)
+    robot.connect()
 
     class ReleasedTeleop:
         name = "outcome_piper_xbox"
 
         def get_action(self):
             return {
-                "delta_x": 0.0,
-                "delta_y": 0.0,
-                "delta_z": 0.0,
-                "delta_yaw": 0.0,
-                "delta_gripper": 0.0,
+                **dict.fromkeys(
+                    ("delta_x", "delta_y", "delta_z", "delta_yaw", "delta_gripper"), 0.0
+                ),
                 "hold": False,
+                "neutral": True,
+                "emergency_stop": False,
             }
 
     monkeypatch.setattr(official, "precise_sleep", lambda _: None)
-    _, robot_action_processor, robot_observation_processor = make_default_processors()
-    with pytest.raises(OutcomePiperStateError, match="hold-to-run was released"):
+    _, ap, op = make_default_processors()
+    try:
         official.teleop_loop(
             teleop=ReleasedTeleop(),
             robot=robot,
             fps=20,
             teleop_action_processor=processor,
-            robot_action_processor=robot_action_processor,
-            robot_observation_processor=robot_observation_processor,
-            duration=0.0,
+            robot_action_processor=ap,
+            robot_observation_processor=op,
+            duration=0.001,
         )
-    assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
-    assert arm.gripper.commands == []
-    assert "electronic_emergency_stop" in arm.calls
-    assert robot.state is PiperState.E_STOP
+        assert [c for c in arm.calls if isinstance(c, tuple) and c[0] == "move_j"] == [
+            ("move_j", [0.0] * 6)
+        ]
+        assert not arm.gripper.commands and "electronic_emergency_stop" not in arm.calls
+        assert robot.state is PiperState.ACTIVE
+    finally:
+        robot.disconnect()
 
 
-def test_hold_release_through_official_record_loop_stops_without_recording_or_motion(
-    tmp_path: Path, monkeypatch
-):
+def test_startup_wait_through_official_record_loop_emits_no_training_frame(tmp_path, monkeypatch):
+    monkeypatch.setattr("lerobot_robot_outcome_piper.processor.time.monotonic", lambda: 100.0)
     from lerobot.processor import make_default_processors
     from lerobot.scripts import lerobot_record as official
+    from lerobot_robot_outcome_piper.recording import TelemetryDataset
 
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
     processor = workflows._processor(robot.config, xbox_config())
-
+    attach_hold(robot, processor.steps[0].control)
+    robot.connect()
     frames = []
 
     class Dataset:
+        root = tmp_path
+        num_episodes = 0
         fps = 20
         features = {"action": {"dtype": "float32", "shape": (7,), "names": list(ACTION_KEYS)}}
 
         def add_frame(self, frame):
             frames.append(frame)
 
-    clock = iter((0.0, 0.0, 0.06, 0.06))
-    monkeypatch.setattr(official.time, "perf_counter", lambda: next(clock))
-    monkeypatch.setattr(official, "precise_sleep", lambda _: None)
-    _, robot_action_processor, robot_observation_processor = make_default_processors()
+    audit = TelemetryDataset(Dataset(), robot)
+    _, ap, op = make_default_processors()
     joystick = FakeJoystick()
     joystick.buttons[1] = 0
     teleop = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
     teleop.connect()
-    with pytest.raises(OutcomePiperStateError, match="hold-to-run was released"):
+    monkeypatch.setattr(official, "precise_sleep", lambda _: None)
+    try:
         official.record_loop(
             robot=robot,
             events={"exit_early": False},
             fps=20,
             teleop_action_processor=processor,
-            robot_action_processor=robot_action_processor,
-            robot_observation_processor=robot_observation_processor,
-            dataset=Dataset(),
+            robot_action_processor=ap,
+            robot_observation_processor=op,
+            dataset=audit,
             teleop=teleop,
-            control_time_s=0.05,
-            single_task="hold release smoke",
+            control_time_s=0.001,
+            single_task="startup wait",
         )
-    assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
-    assert arm.gripper.commands == []
-    assert frames == []
-    assert "electronic_emergency_stop" in arm.calls
+        assert frames == [] and not arm.gripper.commands
+        assert "electronic_emergency_stop" not in arm.calls
+    finally:
+        audit.close()
+        teleop.disconnect()
+        robot.disconnect()
 
 
 @pytest.mark.parametrize(
@@ -1451,6 +1484,8 @@ def test_processor_rejects_observation_outside_frozen_limits(observation, messag
                 "delta_yaw": 0.0,
                 "delta_gripper": 0.0,
                 "hold": False,
+                "neutral": False,
+                "emergency_stop": False,
             }
         )
 
@@ -1470,6 +1505,9 @@ def test_processor_ik_failure_does_not_call_robot_sdk(tmp_path: Path, monkeypatc
         ik_min_singular_value=0.001,
     )
     processor._current_transition = {TransitionKey.OBSERVATION: valid_action()}
+    processor.control.confirm_hold()
+    processor.control.observe(False, True)
+    processor.control.observe(True, True)
     monkeypatch.setattr(
         processor,
         "_solve",
@@ -1484,6 +1522,8 @@ def test_processor_ik_failure_does_not_call_robot_sdk(tmp_path: Path, monkeypatc
                 "delta_yaw": 0.0,
                 "delta_gripper": 0.0,
                 "hold": True,
+                "neutral": False,
+                "emergency_stop": False,
             }
         )
     assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
@@ -1503,6 +1543,9 @@ def test_bound_processor_ik_failure_stops_without_motion(tmp_path: Path, monkeyp
         ik_min_singular_value=0.001,
     )
     processor._current_transition = {TransitionKey.OBSERVATION: valid_action()}
+    processor.control.confirm_hold()
+    processor.control.observe(False, True)
+    processor.control.observe(True, True)
     monkeypatch.setattr(
         processor,
         "_solve",
@@ -1520,6 +1563,8 @@ def test_bound_processor_ik_failure_stops_without_motion(tmp_path: Path, monkeyp
                     "delta_yaw": 0.0,
                     "delta_gripper": 0.0,
                     "hold": True,
+                    "neutral": False,
+                    "emergency_stop": False,
                 }
             )
 
@@ -1651,7 +1696,13 @@ def test_record_does_not_connect_robot_if_teleop_connect_fails(tmp_path: Path, m
         play_sounds=False,
         resume=False,
     )
-    monkeypatch.setattr(workflows, "_processor", lambda *_: object())
+    from lerobot_robot_outcome_piper.teleop_control import TeleopControl
+
+    monkeypatch.setattr(
+        workflows,
+        "_processor",
+        lambda *_: SimpleNamespace(steps=[SimpleNamespace(control=TeleopControl())]),
+    )
     monkeypatch.setattr(official, "make_robot_from_config", lambda _: robot)
     monkeypatch.setattr(official, "make_teleoperator_from_config", lambda _: failing_teleop)
     monkeypatch.setattr(official.LeRobotDataset, "create", lambda *args, **kwargs: Dataset())

@@ -7,8 +7,12 @@ from typing import Any, Callable
 from lerobot.teleoperators.teleoperator import Teleoperator
 
 from .config import OutcomePiperXboxConfig
-from .errors import OutcomePiperStateError, OutcomePiperValidationError
-from .input_safety import request_input_emergency_stop
+from .errors import (
+    OutcomePiperStateError,
+    OutcomePiperValidationError,
+    OutcomePiperInputDisconnected,
+)
+from .input_safety import request_input_emergency_stop, request_disconnected_input_hold
 
 RAW_ACTION_KEYS = (
     "delta_x",
@@ -17,7 +21,12 @@ RAW_ACTION_KEYS = (
     "delta_yaw",
     "delta_gripper",
     "hold",
+    "neutral",
+    "emergency_stop",
 )
+
+DELTA_KEYS = RAW_ACTION_KEYS[:5]
+CONTROL_KEYS = RAW_ACTION_KEYS[5:]
 
 
 class OutcomePiperXbox(Teleoperator):
@@ -45,6 +54,8 @@ class OutcomePiperXbox(Teleoperator):
             "delta_yaw": float,
             "delta_gripper": float,
             "hold": bool,
+            "neutral": bool,
+            "emergency_stop": bool,
         }
 
     @property
@@ -69,6 +80,9 @@ class OutcomePiperXbox(Teleoperator):
     def connect(self, calibrate: bool = True) -> None:
         try:
             self._connect(calibrate)
+        except OutcomePiperInputDisconnected as exc:
+            request_disconnected_input_hold(exc)
+            raise
         except Exception as exc:
             request_input_emergency_stop(exc)
             raise
@@ -114,9 +128,8 @@ class OutcomePiperXbox(Teleoperator):
             self.config.axis_left_trigger,
             self.config.axis_right_trigger,
         )
-        if (
-            joystick.get_numaxes() <= max_axis
-            or joystick.get_numbuttons() <= self.config.hold_button
+        if joystick.get_numaxes() <= max_axis or joystick.get_numbuttons() <= max(
+            self.config.hold_button, self.config.emergency_stop_button
         ):
             joystick.quit()
             raise OutcomePiperStateError("Xbox device does not match the frozen axis/button layout")
@@ -142,16 +155,32 @@ class OutcomePiperXbox(Teleoperator):
     def get_action(self) -> dict[str, float | bool]:
         try:
             return self._get_action()
+        except OutcomePiperInputDisconnected as exc:
+            request_disconnected_input_hold(exc)
+            raise
         except Exception as exc:
             request_input_emergency_stop(exc)
             raise
 
     def _get_action(self) -> dict[str, float | bool]:
         if not self.is_connected:
-            raise OutcomePiperStateError("Xbox is disconnected")
+            raise OutcomePiperInputDisconnected("Xbox is disconnected")
         if self._pygame is not None:
             self._pygame.event.pump()
+            for event in self._pygame.event.get(self._pygame.JOYDEVICEREMOVED):
+                if event.instance_id == self._joystick.get_instance_id():
+                    self._joystick.quit()
+                    raise OutcomePiperInputDisconnected("selected Xbox was disconnected")
         assert self._joystick is not None
+        emergency = bool(self._joystick.get_button(self.config.emergency_stop_button))
+        if emergency:
+            request_input_emergency_stop("Xbox B/emergency-stop button pressed")
+            return {
+                **dict.fromkeys(DELTA_KEYS, 0.0),
+                "hold": False,
+                "neutral": False,
+                "emergency_stop": True,
+            }
         hold = bool(self._joystick.get_button(self.config.hold_button))
         x = self._axis(self.config.axis_x, self.config.axis_signs[0])
         y = self._axis(self.config.axis_y, self.config.axis_signs[1])
@@ -159,6 +188,7 @@ class OutcomePiperXbox(Teleoperator):
         yaw = self._axis(self.config.axis_yaw, self.config.axis_signs[3])
         left = self._trigger(self.config.axis_left_trigger, 0)
         right = self._trigger(self.config.axis_right_trigger, 1)
+        neutral = all(v == 0.0 for v in (x, y, z, yaw, left, right))
         if not hold:
             x = y = z = yaw = left = right = 0.0
         return {
@@ -168,6 +198,8 @@ class OutcomePiperXbox(Teleoperator):
             "delta_yaw": yaw * self.config.yaw_step_rad,
             "delta_gripper": (right - left) * self.config.gripper_step_m,
             "hold": hold,
+            "neutral": neutral,
+            "emergency_stop": False,
         }
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:

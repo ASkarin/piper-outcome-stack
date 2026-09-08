@@ -55,7 +55,8 @@ the current on-site checks and outstanding software work.
    can be inspected in read-only mode, but cannot pass this motion gate. Never fill
    acceptance booleans merely to enter motion.
 8. Start with approved single-joint increments, then joints/gripper and Xbox
-   hold-to-run. No automatic home/reset/retry. Stop and end the session on unexplained
+   pause/resume with a separate B electronic-stop button. New hold acceptance must
+   bind the configured tolerance and timing; see [Xbox setup](piper_xbox.md). No automatic home/reset/retry. Stop and end the session on unexplained
    motion, incorrect direction/zero, stale feedback, or a failed stop.
 
 The plugin requests J mode once, then waits for fresh CAN/J status within
@@ -119,6 +120,10 @@ session/episode/frame/attempt identities, the observation's receive times, frame
 processed action generation time, and SDK call start/end/results. A direct plain-dict
 action has no known generation time (null); dispatch time is recorded independently.
 An SDK return is not a target-arrival acknowledgement. Policy vectors remain unchanged.
+Xbox pause frames retain the fixed joint hold and last gripper target, referencing
+the original commands. They do not invent per-frame SDK writes. Before the session
+has a valid seven-value command, startup waiting is logged as events only. Pauses
+continue to consume fresh images/state and do not extend the episode timer.
 Discarded attempts stay in the event log. Failed/interrupted/finalization-incomplete
 sessions have no valid complete marker and are rejected by resume and data acceptance.
 

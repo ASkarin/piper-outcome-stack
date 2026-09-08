@@ -22,22 +22,24 @@ from lerobot.types import RobotAction, TransitionKey
 from .errors import OutcomePiperValidationError
 from .input_safety import request_input_emergency_stop
 from .safety import ACTION_KEYS, JOINT_KEYS, MotionSafety
-from .teleoperator import RAW_ACTION_KEYS
+from .teleoperator import RAW_ACTION_KEYS, DELTA_KEYS, CONTROL_KEYS
+from .teleop_control import TeleopControl
 
 
 class OutcomePiperAction(dict[str, float]):
     """Canonical action values plus process-local execution intent.
 
     The inherited mapping is deliberately limited to the seven public dataset
-    fields.  ``execute_motion`` is an attribute, not a mapping item, so the
+    fields.  Control intent and epoch are attributes, not a mapping item, so the
     official recorder continues to serialize exactly the canonical schema.
     """
 
-    __slots__ = ("execute_motion", "generated_monotonic_s")
+    __slots__ = ("intent", "epoch", "generated_monotonic_s")
 
-    def __init__(self, values: dict[str, float], *, execute_motion: bool) -> None:
+    def __init__(self, values: dict[str, float], *, intent: str, epoch: int) -> None:
         super().__init__(values)
-        self.execute_motion = execute_motion
+        self.intent = intent
+        self.epoch = epoch
         self.generated_monotonic_s = time.monotonic()
 
 
@@ -57,6 +59,7 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
     ik_residual_tolerance: float
     ik_min_singular_value: float
     _locked_roll_pitch: tuple[float, float] | None = field(default=None, init=False, repr=False)
+    control: TeleopControl = field(default_factory=TeleopControl, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.safety, dict):
@@ -175,17 +178,20 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
 
     def _action(self, action: RobotAction) -> RobotAction:
         if set(action) != set(RAW_ACTION_KEYS):
-            raise OutcomePiperValidationError(
-                "Xbox action does not match the frozen six-field schema"
-            )
+            raise OutcomePiperValidationError("Xbox action does not match the input/control schema")
+        if any(type(action[key]) is not bool for key in CONTROL_KEYS):
+            raise OutcomePiperValidationError("Xbox control flags must be boolean")
+        if action["emergency_stop"]:
+            self.control.stop(True)
+            request_input_emergency_stop("Xbox emergency-stop button pressed")
+            raise OutcomePiperValidationError("Xbox emergency stop requested")
         try:
-            deltas = [float(action[key]) for key in RAW_ACTION_KEYS[:-1]]
+            deltas = [float(action[key]) for key in DELTA_KEYS]
         except (TypeError, ValueError) as exc:
             raise OutcomePiperValidationError("Xbox deltas must be numeric") from exc
         if not all(math.isfinite(value) for value in deltas):
             raise OutcomePiperValidationError("Xbox deltas must be finite")
-        if type(action["hold"]) is not bool:
-            raise OutcomePiperValidationError("Xbox hold must be boolean")
+        intent, epoch = self.control.observe(action["hold"], action["neutral"])
         if any(abs(value) > self.max_xyz_step_m for value in deltas[:3]):
             raise OutcomePiperValidationError("Xbox XYZ delta exceeds the measured step limit")
         if abs(deltas[3]) > self.max_yaw_step_rad:
@@ -211,13 +217,14 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
             raise OutcomePiperValidationError("PiPER observation is outside frozen joint limits")
         if not self.safety.gripper_lower <= current_gripper <= self.safety.gripper_upper:
             raise OutcomePiperValidationError("PiPER observation is outside frozen gripper limits")
-        if not action["hold"]:
+        if intent != "run":
             return OutcomePiperAction(
                 {
                     **{key: value for key, value in zip(JOINT_KEYS, current, strict=True)},
                     "gripper.pos": current_gripper,
                 },
-                execute_motion=False,
+                intent=intent,
+                epoch=epoch,
             )
 
         from pyAgxArm.utiles.mdh_kinematics import fk_from_mdh, get_mdh
@@ -244,17 +251,22 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
         ):
             raise OutcomePiperValidationError("Xbox target is outside the frozen workspace")
         target_joints = self._solve(current, target_pose)
-        target_gripper = current_gripper + deltas[4]
+        target_gripper = (
+            self.control.gripper_target
+            if deltas[4] == 0 and self.control.gripper_target is not None
+            else current_gripper + deltas[4]
+        )
         if not self.safety.gripper_lower <= target_gripper <= self.safety.gripper_upper:
             raise OutcomePiperValidationError("Xbox gripper target is outside frozen limits")
-        if abs(target_gripper - current_gripper) > self.safety.max_gripper_step:
+        if deltas[4] != 0 and abs(target_gripper - current_gripper) > self.safety.max_gripper_step:
             raise OutcomePiperValidationError("Xbox gripper target exceeds frozen step limit")
         return OutcomePiperAction(
             {
                 **{key: value for key, value in zip(JOINT_KEYS, target_joints, strict=True)},
                 "gripper.pos": target_gripper,
             },
-            execute_motion=True,
+            intent="run",
+            epoch=epoch,
         )
 
     def transform_features(

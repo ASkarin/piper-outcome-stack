@@ -58,7 +58,11 @@ def processor(**overrides: float | int | MotionSafety) -> OutcomePiperXboxProces
         "ik_min_singular_value": 1e-8,
     }
     values.update(overrides)
-    return OutcomePiperXboxProcessor(**values)
+    step = OutcomePiperXboxProcessor(**values)
+    step.control.confirm_hold()
+    step.control.observe(False, True)
+    step.control.observe(True, True)
+    return step
 
 
 def observation(joints: list[float], gripper: float = 0.03) -> dict[str, float]:
@@ -76,6 +80,8 @@ def raw_action(*, dx: float = 0.0, yaw: float = 0.0) -> dict[str, float | bool]:
         "delta_yaw": yaw,
         "delta_gripper": 0.0,
         "hold": True,
+        "neutral": dx == 0 and yaw == 0,
+        "emergency_stop": False,
     }
 
 
@@ -222,3 +228,33 @@ def test_processor_failure_path_never_calls_sdk(monkeypatch):
         action = step.action(raw_action(dx=0.001))
         sdk_calls.append({key: float(action[key]) for key in ACTION_KEYS})
     assert sdk_calls == []
+
+
+def test_resume_uses_latest_feedback_preserves_roll_pitch_and_grasp(monkeypatch):
+    step = processor()
+    current = [0.1, -0.2, 0.3, -0.1, 0.2, -0.3]
+    step._current_transition = {TransitionKey.OBSERVATION: observation(current)}
+    calls = []
+
+    def solve(q, pose):
+        calls.append((q[:], pose[:]))
+        return q[:]
+
+    monkeypatch.setattr(step, "_solve", solve)
+    step.action(raw_action())
+    locked = step._locked_roll_pitch
+    step.control.gripper_target = 0.05
+    step.action({**raw_action(), "hold": False})
+    step.control.confirm_hold()
+    latest = [v + 0.001 for v in current]
+    step._current_transition = {TransitionKey.OBSERVATION: observation(latest, gripper=0.03)}
+    result = step.action(raw_action())
+    assert result["gripper.pos"] == 0.05
+    assert calls[-1][0] == latest and tuple(calls[-1][1][3:5]) == locked
+    assert set(result) == set(ACTION_KEYS)
+
+
+def test_processor_b_preempts_invalid_numeric_input():
+    step = processor()
+    with pytest.raises(OutcomePiperValidationError, match="emergency stop requested"):
+        step.action({**raw_action(), "emergency_stop": True, "delta_x": "invalid"})

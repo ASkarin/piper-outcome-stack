@@ -42,9 +42,12 @@ release. The default `read_only` mode connects without enabling the arm and reje
 actions. `motion` additionally requires matching frozen safety and hardware-acceptance
 files bound to the exact live firmware identity. The frozen safety file also supplies
 the only motion-speed percentage and gripper force used by the SDK. Communication,
-watchdog, command, device-disconnect, and hold-to-run release faults issue the
-hardware-validated electronic emergency stop and latch the session; a new motion
-session is required after operator intervention. Disconnect does not home, reset, or
+command and feedback faults issue the hardware-validated electronic emergency stop
+and latch the session. Xbox shoulder release requests a fixed-position hold and
+allows deliberate rearming after confirmation; B independently requests a latched
+electronic stop. Selected gamepad loss or a stalled control loop attempts a hold
+before latching a fault, provided feedback and CAN remain healthy. Failed holds
+use electronic stop; this is not a promise of support after CAN/process loss. Disconnect does not home, reset, or
 disable the arm.
 
 Motion waits for fresh CAN/J mode confirmation before enable and checks that mode on
@@ -65,8 +68,8 @@ the first ACT/SmolVLA/outcome-model input uses RGB and the seven state values. R
 bring-up may omit the camera; recording requires it, matching camera/Dataset/Xbox fps
 and measured `robot.capture_timing` values.
 See [acceptance instructions](docs/operations/piper_bringup.md). Xbox GUID, axes, directions, trigger endpoints,
-deadzone, control rate, step limits, workspace, and safety limits have no guessed
-defaults and must be frozen after hardware acceptance.
+deadzone, separate shoulder/B indices, hold tolerance/stable-time/timeout, control rate, step limits, workspace, and safety limits have no guessed
+defaults and must be frozen after hardware acceptance. See [Xbox pause and input measurement](docs/operations/piper_xbox.md).
 
 For daily development, run `uv sync --frozen --extra local-controller --group dev`
 once in the personal controller checkout; ordinary source edits then need only a
@@ -85,6 +88,7 @@ five development-plugin read-only sessions and basic joint/gripper commissioning
 ```bash
 piper-outcome-stack doctor --root .
 piper-outcome-stack robot doctor
+piper-outcome-stack xbox-input --list
 piper-outcome-stack audit-dataset --root <dataset-root> --repo-id <exact-repo-id>
 piper-outcome-stack teleoperate --robot.type=outcome_piper --teleop.type=outcome_piper_xbox ...
 piper-outcome-stack record --robot.type=outcome_piper --teleop.type=outcome_piper_xbox \
