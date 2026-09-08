@@ -74,8 +74,13 @@ def teleoperate(cfg: Any) -> None:
     robot = make_robot_from_config(robot_config)
     teleop_action_processor = _processor(robot_config, teleop_config)
     _, robot_action_processor, robot_observation_processor = make_default_processors()
+    robot.configure_teleoperation(
+        teleop_action_processor.steps[0].control, teleop_config.hold_settings()
+    )
     teleop.connect()
     try:
+        if teleop.get_action()["emergency_stop"]:
+            raise ValueError("release the emergency-stop button before starting a session")
         with motion_input_safety_scope():
             robot.connect()
             try:

@@ -160,3 +160,120 @@ def test_incomplete_recording_is_preserved_and_rejected(tmp_path, monkeypatch, f
     assert not list((cfg.dataset.root / "telemetry").glob("*/complete.json"))
     with pytest.raises(RuntimeError, match="incomplete telemetry"):
         verify_telemetry(cfg.dataset.root, NS(num_frames=0))
+
+
+class PauseRobot(Robot):
+    """Synthetic dispatch proof; the real official loop ignores returned actions."""
+
+    def send_action(self, action):
+        result = super().send_action(action)
+        phase = (self._observation_count - 1) % 5
+        if phase == 0:
+            self.last_action_telemetry.update(result="waiting", values=None, commands=[])
+        elif phase == 1:
+            self.retained = dict(result)
+            self.retained["gripper.pos"] = 0.025
+            # This normal frame still uses the original action, checked strictly.
+            self.gripper_command = dict(
+                name="move_gripper_m",
+                target=0.025,
+                force=1.0,
+                started_monotonic_s=1.0,
+                ended_monotonic_s=1.01,
+                result="sdk_returned",
+            )
+            self.hold_command = dict(
+                name="hold_move_j",
+                target=list(self.retained.values())[:6],
+                started_monotonic_s=2.0,
+                ended_monotonic_s=2.01,
+                result="sdk_returned",
+            )
+        elif phase in (2, 3):
+            self.last_action_telemetry.update(
+                result="holding",
+                values=self.retained,
+                hold_id=1 + (self._observation_count - 1) // 5,
+                hold_confirmed=phase == 3,
+                hold_command=self.hold_command,
+                retained_gripper_command=self.gripper_command,
+                commands=[self.hold_command] if phase == 2 else [],
+            )
+            return self.retained
+        return result
+
+
+def pause_devices(monkeypatch):
+    _, teleop, events, listener = devices(monkeypatch)
+    robot = PauseRobot()
+    monkeypatch.setattr(official, "make_robot_from_config", lambda _: robot)
+    loop = official.record_loop
+
+    def five_frames(**kwargs):
+        for _ in range(5):
+            loop(**kwargs)
+
+    monkeypatch.setattr(official, "record_loop", five_frames)
+    return robot, events
+
+
+def test_pause_frames_finalize_reload_replay_and_resume(tmp_path, monkeypatch):
+    robot, _ = pause_devices(monkeypatch)
+    cfg = configuration(tmp_path / "dataset")
+    dataset = record(cfg)
+    loaded = LeRobotDataset(dataset.repo_id, root=cfg.dataset.root)
+    assert verify_telemetry(loaded.root, loaded) == {"episodes": 1, "frames": 4}
+    for i in (1, 2):
+        np.testing.assert_array_equal(
+            loaded[i]["action"], np.asarray(list(robot.retained.values()), dtype=np.float32)
+        )
+    replayed = smoke._replay(loaded, loaded.root)
+    assert len(replayed.actions) == 4
+    log = next((loaded.root / "telemetry").glob("*/events.jsonl"))
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len([r for r in rows if r["event"] == "control_wait"]) == 1
+    holds = [
+        r["action"]
+        for r in rows
+        if r["event"] == "frame_pending" and r["action"]["result"] == "holding"
+    ]
+    assert len(holds[0]["commands"]) == 1 and holds[1]["commands"] == []
+    assert holds[0]["hold_command"] == holds[1]["hold_command"]
+    # A new recording session can reuse local hold_id=1 without conflating references.
+    monkeypatch.setattr(official, "make_robot_from_config", lambda _: PauseRobot())
+    resumed = record(configuration(loaded.root, resume=True, repo_id=dataset.repo_id))
+    loaded = LeRobotDataset(resumed.repo_id, root=resumed.root)
+    assert verify_telemetry(loaded.root, loaded) == {"episodes": 2, "frames": 8}
+    # Corrupting one retained reference must fail the audit.
+    for row in rows:
+        if row["event"] == "hold_reference":
+            row["reference"]["hold_command"]["target"][0] += 1
+    log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    with pytest.raises(RuntimeError, match="matching recorded reference"):
+        verify_telemetry(loaded.root, loaded)
+
+
+def test_pause_rerecord_retains_only_replacement_attempt(tmp_path, monkeypatch):
+    _, events = pause_devices(monkeypatch)
+    events["rerecord_episode"] = True
+    dataset = record(configuration(tmp_path / "dataset"))
+    loaded = LeRobotDataset(dataset.repo_id, root=dataset.root)
+    assert verify_telemetry(loaded.root, loaded) == {"episodes": 1, "frames": 4}
+
+
+def test_pause_failure_is_not_a_complete_training_episode(tmp_path, monkeypatch):
+    robot, _ = pause_devices(monkeypatch)
+    send = robot.send_action
+
+    def fail_after_pause(action):
+        if robot._observation_count == 5:
+            raise RuntimeError("hold confirmation failed")
+        return send(action)
+
+    robot.send_action = fail_after_pause
+    cfg = configuration(tmp_path / "dataset")
+    with pytest.raises(RuntimeError, match="hold confirmation failed"):
+        record(cfg)
+    assert not list((cfg.dataset.root / "telemetry").glob("*/complete.json"))
+    with pytest.raises(RuntimeError, match="incomplete telemetry session"):
+        verify_telemetry(cfg.dataset.root, NS(num_frames=0))

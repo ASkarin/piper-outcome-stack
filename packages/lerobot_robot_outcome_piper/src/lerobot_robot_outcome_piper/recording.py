@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import copy
+import math
 import json
 import uuid
 from datetime import datetime, timezone
@@ -9,6 +10,38 @@ from pathlib import Path
 from contextlib import ExitStack
 import numpy as np
 from .safety import ACTION_KEYS
+
+
+def holding_reference(action):
+    """Validate a retained command, not a fictitious dispatch for this frame."""
+    command = action.get("hold_command")
+    gripper = action.get("retained_gripper_command")
+    values = action.get("values")
+    if type(action.get("hold_id")) is not int or action["hold_id"] <= 0:
+        raise RuntimeError("holding frame has no valid hold reference")
+    if not isinstance(values, dict) or set(values) != set(ACTION_KEYS):
+        raise RuntimeError("holding frame lacks seven effective action values")
+    for item, name in ((command, "hold_move_j"), (gripper, "move_gripper_m")):
+        if (
+            not isinstance(item, dict)
+            or item.get("name") != name
+            or item.get("result") != "sdk_returned"
+        ):
+            raise RuntimeError("holding frame lacks a successful command reference")
+        start, end = item.get("started_monotonic_s"), item.get("ended_monotonic_s")
+        if (
+            start is None
+            or end is None
+            or not all(math.isfinite(t) for t in (start, end))
+            or end < start
+        ):
+            raise RuntimeError("holding command timestamps are invalid")
+    expected = [values[k] for k in ACTION_KEYS]
+    if command.get("target") != expected[:6] or gripper.get("target") != expected[6]:
+        raise RuntimeError("holding values differ from retained command targets")
+    if not all(math.isfinite(float(v)) for v in expected):
+        raise RuntimeError("holding values are not finite")
+    return {"hold_command": command, "retained_gripper_command": gripper, "values": values}
 
 
 class TelemetryDataset:
@@ -23,6 +56,7 @@ class TelemetryDataset:
         self.saved_episodes = set()
         self.attempt = 0
         self.last_sequence = None
+        self.hold_references = {}
         self.emit(
             "session",
             started_at_utc=datetime.now(timezone.utc).isoformat(),
@@ -41,13 +75,31 @@ class TelemetryDataset:
     def add_frame(self, frame):
         observation = copy.deepcopy(self.robot.last_observation_telemetry)
         action = copy.deepcopy(self.robot.last_action_telemetry)
-        if observation is None or action is None or action["result"] != "sdk_returned":
+        if observation is None or action is None:
             raise RuntimeError("recording requires complete observation and SDK dispatch telemetry")
-        if observation["quality"] != "checked":
-            raise RuntimeError("measurement-only observation cannot enter a training episode")
         sequence = observation["sequence"]
         if sequence == self.last_sequence or action["observation_sequence"] != sequence:
             raise RuntimeError("telemetry does not belong to this observation/action pair")
+        self.last_sequence = sequence
+        if action["result"] in ("waiting", "discarded"):
+            self.emit("control_wait", observation=observation, action=action)
+            return
+        if observation["quality"] != "checked":
+            raise RuntimeError("measurement-only observation cannot enter a training episode")
+        if action["result"] == "holding":
+            reference = holding_reference(action)
+            hold_id = action["hold_id"]
+            if hold_id in self.hold_references and self.hold_references[hold_id] != reference:
+                raise RuntimeError("hold reference changed while retaining the same identifier")
+            if hold_id not in self.hold_references:
+                self.hold_references[hold_id] = copy.deepcopy(reference)
+                self.emit("hold_reference", hold_id=hold_id, reference=reference)
+            frame = dict(frame)
+            frame["action"] = np.asarray(
+                [action["values"][k] for k in ACTION_KEYS], dtype=np.float32
+            )
+        elif action["result"] != "sdk_returned":
+            raise RuntimeError("recording requires complete observation and SDK dispatch telemetry")
         expected = np.asarray([action["values"][k] for k in ACTION_KEYS], dtype=np.float32)
         if not np.array_equal(np.asarray(frame["action"]), expected):
             raise RuntimeError("Dataset action differs from SDK-dispatched action")
@@ -65,7 +117,12 @@ class TelemetryDataset:
 
     def save_episode(self):
         if not self.pending:
-            raise RuntimeError("cannot save an empty telemetry episode")
+            self.emit(
+                "episode_empty", episode_index=self.dataset.num_episodes, attempt=self.attempt
+            )
+            self.dataset.clear_episode_buffer()
+            self.attempt += 1
+            return
         index = self.dataset.num_episodes
         self.dataset.save_episode()
         self.emit(
@@ -95,7 +152,7 @@ class TelemetryDataset:
             json.dump(
                 {
                     "session": self.session,
-                    "status": "complete",
+                    "status": "complete" if self.saved_frames else "empty",
                     "frames": self.saved_frames,
                     "episodes": sorted(self.saved_episodes),
                 },
@@ -112,19 +169,37 @@ def verify_telemetry(root, dataset):
         if not (directory / "complete.json").exists():
             raise RuntimeError(f"incomplete telemetry session: {directory.name}")
         completion = json.loads((directory / "complete.json").read_text())
-        if completion.get("status") != "complete":
+        if completion.get("status") not in ("complete", "empty"):
             raise RuntimeError(f"incomplete telemetry session: {directory.name}")
         events = [
             json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()
         ]
         if any(e["event"] == "failed" for e in events):
             raise RuntimeError(f"failed telemetry session: {directory.name}")
+        references = {}
+        for event in events:
+            if event["event"] == "hold_reference":
+                key = event["hold_id"]
+                if key in references and references[key] != event["reference"]:
+                    raise RuntimeError("inconsistent hold reference")
+                references[key] = event["reference"]
+        if completion.get("status") == "empty" and (
+            completion.get("frames") != 0 or any(e["event"] == "episode_saved" for e in events)
+        ):
+            raise RuntimeError("empty session contains saved training frames")
         accepted = {
             (e["episode_index"], e["attempt"]) for e in events if e["event"] == "episode_saved"
         }
         for e in events:
             if e["event"] != "frame_pending" or (e["episode_index"], e["attempt"]) not in accepted:
                 continue
+            action = e["action"]
+            if action.get("result") == "holding":
+                reference = holding_reference(action)
+                if references.get(action["hold_id"]) != reference:
+                    raise RuntimeError("holding frame has no matching recorded reference")
+            elif action.get("result") != "sdk_returned":
+                raise RuntimeError("non-dispatched waiting/fault action entered the Dataset")
             key = (e["episode_index"], e["frame_index"])
             if key in rows:
                 raise RuntimeError("duplicate committed telemetry row")
@@ -222,7 +297,16 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             official.init_visualization(
                 cfg.display_mode, session_name="recording", ip=cfg.display_ip, port=cfg.display_port
             )
+        from .config import OutcomePiperXboxConfig
+
+        if isinstance(cfg.teleop, OutcomePiperXboxConfig):
+            robot.configure_teleoperation(
+                teleop_action_processor.steps[0].control, cfg.teleop.hold_settings()
+            )
+            audit.emit("teleoperation_config", config=repr(cfg.teleop))
         teleop.connect()
+        if isinstance(cfg.teleop, OutcomePiperXboxConfig) and teleop.get_action()["emergency_stop"]:
+            raise ValueError("release the emergency-stop button before starting a session")
         robot.connect()
         listener, events = official.init_keyboard_listener()
         loop_args = dict(
@@ -261,6 +345,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
                     error=f"{type(exc).__name__}: {exc}",
                     observation=robot.last_observation_telemetry,
                     action=robot.last_action_telemetry,
+                    stop_outcome=getattr(robot, "stop_outcome", None),
                 )
             except Exception as log_error:
                 exc.add_note(f"Telemetry failure record could not be written: {log_error}")

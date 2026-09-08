@@ -30,6 +30,7 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("teleoperate", add_help=False)
     commands.add_parser("record", add_help=False)
     commands.add_parser("sim", add_help=False)
+    commands.add_parser("xbox-input", add_help=False)
     return parser
 
 
@@ -49,6 +50,10 @@ def _run(args: argparse.Namespace) -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args and raw_args[0] == "xbox-input":
+        from .xbox_input import main as xbox_main
+
+        return xbox_main(raw_args[1:])
     if raw_args and raw_args[0] == "sim":
         from piper_outcome_stack.sim.cli import main as sim_main
 

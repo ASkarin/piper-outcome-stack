@@ -11,3 +11,7 @@ class OutcomePiperStateError(OutcomePiperError):
 
 class OutcomePiperValidationError(OutcomePiperError):
     """Invalid input, feedback, or frozen safety data."""
+
+
+class OutcomePiperInputDisconnected(OutcomePiperStateError):
+    """A positively detected loss of the selected input device."""

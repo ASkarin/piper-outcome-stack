@@ -18,6 +18,7 @@ from .timing import FeedbackReceiver
 from .errors import OutcomePiperStateError, OutcomePiperValidationError
 from .input_safety import register_active_motion_session
 from .processor import OutcomePiperAction
+from .teleop_control import HoldSettings, JointHold, TeleopControl, TeleopState
 from .safety import (
     ACTION_KEYS,
     JOINT_KEYS,
@@ -25,6 +26,7 @@ from .safety import (
     load_motion_safety,
     validate_live_firmware_driver,
     validate_live_hardware_acceptance,
+    validate_teleoperation_hold,
 )
 from .sdk import PiperFactory, create_piper
 
@@ -88,6 +90,19 @@ class OutcomePiper(Robot):
         self._state = PiperState.DISCONNECTED
         self._safety: MotionSafety | None = None
         self._last_action_at: float | None = None
+        self._last_control_tick_s: float | None = None
+        self._teleop: TeleopControl | None = None
+        self._hold_settings: HoldSettings | None = None
+        self._hold_window: JointHold | None = None
+        self._hold_command: dict | None = None
+        self._hold_id = 0
+        self._hold_epoch = -1
+        self._running_epoch = -1
+        self._last_gripper_target: float | None = None
+        self._last_gripper_command: dict | None = None
+        self._input_fault_requested = threading.Event()
+        self._electronic_stop_attempted = False
+        self._stop_outcome: str | None = None
         self._last_feedback: FeedbackTelemetry | None = None
         self._latched_cause: str | None = None
         self._stop_error: str | None = None
@@ -248,28 +263,55 @@ class OutcomePiper(Robot):
             return f"{type(cause).__name__}: {cause}"
         return str(cause)
 
+    def _latch_state_only(self, state: PiperState, cause: BaseException | str) -> None:
+        if state not in _TERMINAL_STATES:
+            raise ValueError("only terminal fault states may be latched")
+        if self._emergency_stop_requested.is_set():
+            state, cause = PiperState.E_STOP, self._emergency_stop_cause or cause
+        if self._state not in _TERMINAL_STATES or (
+            self._emergency_stop_requested.is_set() and self._state is not PiperState.E_STOP
+        ):
+            self._state = state
+            self._latched_cause = self._cause_text(cause)
+            if self._teleop is not None:
+                self._teleop.stop(state is PiperState.E_STOP)
+
+    @property
+    def stop_outcome(self) -> str | None:
+        with self._command_lock:
+            return self._stop_outcome
+
+    def _send_electronic_stop_locked(self) -> None:
+        if (
+            self._electronic_stop_attempted
+            or self._safety is None
+            or not self._hardware_identity_verified
+        ):
+            return
+        self._electronic_stop_attempted = True
+        self._stop_outcome = "electronic_stop_requested"
+        try:
+            if self._arm is not None:
+                self._arm.electronic_emergency_stop()
+                self._raise_if_comm_error("electronic emergency stop")
+                self._stop_outcome = "electronic_stop_sent_unverified"
+        except Exception as exc:
+            self._stop_error = self._cause_text(exc)
+            self._stop_outcome = "stop_unknown"
+
     def _set_latch(self, state: PiperState, cause: BaseException | str) -> None:
         with self._command_lock:
-            if state not in _TERMINAL_STATES:
-                raise ValueError("only terminal fault states may be latched")
-            if self._emergency_stop_requested.is_set():
-                state = PiperState.E_STOP
-                cause = self._emergency_stop_cause or cause
-            first_latch = self._state not in _TERMINAL_STATES
-            if first_latch:
-                self._state = state
-                self._latched_cause = self._cause_text(cause)
-                if self._safety is not None and self._hardware_identity_verified:
-                    try:
-                        if self._arm is not None:
-                            self._arm.electronic_emergency_stop()
-                    except Exception as exc:
-                        self._stop_error = self._cause_text(exc)
-                    else:
-                        try:
-                            self._raise_if_comm_error("electronic emergency stop")
-                        except Exception as exc:
-                            self._stop_error = self._cause_text(exc)
+            first = self._state not in _TERMINAL_STATES
+            self._latch_state_only(state, cause)
+            if first or self._emergency_stop_requested.is_set():
+                self._send_electronic_stop_locked()
+            if self.last_action_telemetry is not None:
+                self.last_action_telemetry.update(
+                    stop_outcome=self._stop_outcome,
+                    stop_error=self._stop_error,
+                    hold_command=self._hold_command,
+                    fault=self._latched_cause,
+                )
 
     def request_emergency_stop(self, cause: BaseException | str) -> None:
         """Synchronously request and latch the verified electronic stop action.
@@ -312,6 +354,24 @@ class OutcomePiper(Robot):
             detail = self._arm.get_comm_error()
             raise OutcomePiperStateError(f"{operation} left CAN communication in error: {detail}")
 
+    def _watchdog_check_locked(self) -> bool:
+        if self._state != PiperState.ACTIVE:
+            return False
+        last = self._last_control_tick_s
+        if last is not None and self._monotonic() - last > self._safety.watchdog_timeout_s:
+            if self._teleop is None:
+                self._set_latch(PiperState.FAULT, "action watchdog expired")
+            else:
+                self.request_input_fault("control-loop watchdog expired")
+            return False
+        if self._teleop is not None and self._teleop.state is not TeleopState.RUNNING:
+            try:
+                self._update_hold_locked()
+            except Exception as exc:
+                self._set_latch(PiperState.FAULT, exc)
+                return False
+        return True
+
     def _start_watchdog(self) -> None:
         assert self._safety is not None
         self._watchdog_stop.clear()
@@ -322,16 +382,8 @@ class OutcomePiper(Robot):
                 with self._command_lock:
                     if self._watchdog_stop.is_set():
                         return
-                    last = self._last_action_at
-                    if (
-                        self._state == PiperState.ACTIVE
-                        and last is not None
-                        and self._monotonic() - last > self._safety.watchdog_timeout_s
-                    ):
-                        try:
-                            self._latch(PiperState.FAULT, "action watchdog expired")
-                        except OutcomePiperStateError:
-                            return
+                    if not self._watchdog_check_locked():
+                        return
 
         self._watchdog_thread = threading.Thread(
             target=monitor, name="outcome-piper-watchdog", daemon=True
@@ -423,6 +475,9 @@ class OutcomePiper(Robot):
                     self._confirm_enabled_locked(enable_requested_s)
                     self._state = PiperState.ACTIVE
                     self._last_action_at = self._monotonic()
+                    self._last_control_tick_s = self._last_action_at
+                    if self._teleop is not None:
+                        self._start_hold_locked()
                     self._start_watchdog()
                     register_active_motion_session(self)
             except Exception as exc:
@@ -616,6 +671,166 @@ class OutcomePiper(Robot):
         if not math.isfinite(age) or age < 0 or age > limit:
             self._latch(PiperState.FAULT, "observation expired before SDK command")
 
+    @property
+    def teleop_state(self):
+        return None if self._teleop is None else self._teleop.state
+
+    def configure_teleoperation(self, control: TeleopControl, settings: HoldSettings) -> None:
+        with self._command_lock:
+            if self._state is not PiperState.DISCONNECTED or self.config.execution_mode != "motion":
+                raise OutcomePiperStateError(
+                    "configure teleoperation before connecting a motion session"
+                )
+            validate_teleoperation_hold(self.config.hardware_acceptance_path, settings)
+            self._teleop, self._hold_settings = control, settings
+
+    def _start_hold_locked(self) -> None:
+        self._require_active_locked("capture hold")
+        self._raise_if_emergency_stop_requested_locked()
+        joints, width = self._feedback()
+        # Validate the captured arm target through the existing limits/FK path.
+        # The observed gripper value is validation input only; no gripper command follows.
+        self._validate_action({**dict(zip(JOINT_KEYS, joints)), "gripper.pos": width})
+        requested = self._monotonic()
+        command = {
+            "name": "hold_move_j",
+            "target": list(joints),
+            "started_monotonic_s": requested,
+            "result": "failed",
+        }
+        self._hold_window = JointHold(joints, self._hold_settings, requested)
+        self._hold_command = command
+        self._hold_id += 1
+        self._hold_epoch = self._teleop.epoch
+        try:
+            self._arm.move_j(joints)
+            self._raise_if_comm_error("hold_move_j")
+            self._raise_if_emergency_stop_requested_locked()
+            command["result"] = "sdk_returned"
+        finally:
+            command["ended_monotonic_s"] = self._monotonic()
+
+    def _update_hold_locked(self) -> None:
+        self._require_active_locked("confirm hold")
+        self._raise_if_emergency_stop_requested_locked()
+        joints, _ = self._feedback()
+        confirmed = self._hold_window.observe(
+            joints, self._last_feedback.received_monotonic_s[:3], self._monotonic()
+        )
+        if self._teleop.hold_confirmed and not confirmed:
+            self._teleop.request_hold()
+            self._hold_epoch = self._teleop.epoch
+        elif confirmed and not self._teleop.hold_confirmed:
+            self._teleop.confirm_hold()
+            self._stop_outcome = "hold_confirmed"
+
+    def _teleop_run_allowed_locked(self, action: OutcomePiperAction) -> bool:
+        self._raise_if_emergency_stop_requested_locked()
+        if action.intent not in {"run", "hold", "wait"} or type(action.epoch) is not int:
+            self._latch(PiperState.FAULT, "invalid teleoperation intent")
+        if action.epoch != self._teleop.epoch:
+            return False
+        age = self._monotonic() - action.generated_monotonic_s
+        limit = (
+            self.config.capture_timing.observation_max_age_s
+            if self.config.capture_timing
+            else self.config.feedback_timeout_s
+        )
+        if not math.isfinite(age) or age < 0:
+            self._latch(PiperState.FAULT, "teleoperation action generation time is invalid")
+        if age > limit:
+            self.request_input_fault("teleoperation control tick expired")
+            raise OutcomePiperStateError(self._latched_message())
+        self._last_control_tick_s = self._monotonic()
+        if (
+            self._input_fault_requested.is_set()
+            or action.intent != "run"
+            or not self._teleop.permits(action.epoch)
+        ):
+            return False
+        if self._running_epoch != action.epoch:
+            joints, _ = self._feedback()
+            if not self._teleop.hold_confirmed or any(
+                abs(a - b) > self._hold_settings.joint_tolerance_rad
+                for a, b in zip(joints, self._hold_window.target, strict=True)
+            ):
+                self._teleop.request_hold()
+                self._hold_epoch = self._teleop.epoch
+                self._hold_window.restart(self._monotonic())
+                return False
+            self._running_epoch = action.epoch
+        return True
+
+    def _teleop_idle_locked(self, action):
+        try:
+            if self._teleop.state is TeleopState.RUNNING:
+                self.last_action_telemetry.update(result="discarded", reason="stale control epoch")
+                return dict(action)
+            new_command = self._hold_epoch != self._teleop.epoch
+            if new_command:
+                self._start_hold_locked()
+            self._update_hold_locked()
+            values = (
+                None
+                if self._last_gripper_target is None
+                else {
+                    **dict(zip(JOINT_KEYS, self._hold_window.target)),
+                    "gripper.pos": self._last_gripper_target,
+                }
+            )
+            self.last_action_telemetry.update(
+                result="waiting" if values is None else "holding",
+                values=values,
+                control_state=self._teleop.state.value,
+                control_epoch=self._teleop.epoch,
+                hold_id=self._hold_id,
+                hold_command=dict(self._hold_command),
+                retained_gripper_command=None
+                if self._last_gripper_command is None
+                else dict(self._last_gripper_command),
+                hold_confirmed=self._teleop.hold_confirmed,
+                commands=[
+                    *self.last_action_telemetry["commands"],
+                    *([dict(self._hold_command)] if new_command else []),
+                ],
+            )
+            return dict(action) if values is None else values
+        except Exception as exc:
+            self._latch(PiperState.FAULT, exc)
+
+    def request_input_fault(self, cause: BaseException | str) -> None:
+        """Hold on confirmed input loss, then lock the session; no automatic reconnect."""
+        if self._teleop is None:
+            self.request_emergency_stop(cause)
+            return
+        self._input_fault_requested.set()
+        if self._teleop.state is TeleopState.RUNNING:
+            self._teleop.request_hold()
+        with self._command_lock:
+            if self._state in _TERMINAL_STATES:
+                return
+            try:
+                self._raise_if_emergency_stop_requested_locked()
+                if self._teleop.state is TeleopState.RUNNING:
+                    self._teleop.request_hold()
+                if self._hold_epoch != self._teleop.epoch:
+                    self._start_hold_locked()
+                while True:
+                    self._update_hold_locked()
+                    if self._teleop.hold_confirmed:
+                        break
+                    self._emergency_stop_requested.wait(
+                        min(0.005, max(0.0, self._hold_window.deadline - self._monotonic()))
+                    )
+                self._stop_outcome = "hold_confirmed"
+                self._latch_state_only(PiperState.FAULT, cause)
+            except Exception as exc:
+                self._set_latch(PiperState.FAULT, exc)
+            if self.last_action_telemetry is not None:
+                self.last_action_telemetry.update(
+                    input_fault=self._cause_text(cause), stop_outcome=self._stop_outcome
+                )
+
     def _validate_action(self, action: Mapping[str, Any]) -> tuple[list[float], float]:
         if set(action) != set(ACTION_KEYS):
             raise OutcomePiperValidationError(
@@ -664,7 +879,8 @@ class OutcomePiper(Robot):
         gripper = values[6]
         if not self._safety.gripper_lower <= gripper <= self._safety.gripper_upper:
             raise OutcomePiperValidationError("gripper target is outside frozen limits")
-        if abs(gripper - current_gripper) > self._safety.max_gripper_step:
+        retained_gripper = self._teleop is not None and gripper == self._last_gripper_target
+        if not retained_gripper and abs(gripper - current_gripper) > self._safety.max_gripper_step:
             raise OutcomePiperValidationError("gripper target exceeds frozen step limit")
         return values[:6], gripper
 
@@ -682,9 +898,19 @@ class OutcomePiper(Robot):
                 "commands": [],
                 "result": "rejected",
             }
-            joints, gripper = self._validate_action(action)
-            if type(action) is OutcomePiperAction and action.execute_motion is False:
-                self._latch(PiperState.E_STOP, "hold-to-run was released")
+            if self._teleop is None and type(action) is OutcomePiperAction:
+                raise OutcomePiperStateError("Xbox control must be configured before dispatch")
+            if self._teleop is not None:
+                if type(action) is not OutcomePiperAction:
+                    self._latch(PiperState.FAULT, "Xbox session requires control intent metadata")
+                if not self._teleop_run_allowed_locked(action):
+                    return self._teleop_idle_locked(action)
+            try:
+                joints, gripper = self._validate_action(action)
+            except Exception as exc:
+                if self._teleop is not None:
+                    self._latch(PiperState.FAULT, exc)
+                raise
             command = None
             try:
                 self._require_active_locked("move_j")
@@ -692,6 +918,7 @@ class OutcomePiper(Robot):
                 self._check_observation_age()
                 command = {
                     "name": "move_j",
+                    "target": list(joints),
                     "started_monotonic_s": self._monotonic(),
                     "result": "failed",
                 }
@@ -704,29 +931,48 @@ class OutcomePiper(Robot):
                     command["ended_monotonic_s"] = self._monotonic()
                 self._latch(PiperState.FAULT, exc)
             self._raise_if_emergency_stop_requested_locked()
-            command = None
-            try:
-                self._require_active_locked("gripper command")
-                assert self._gripper is not None
-                assert self._safety is not None
-                self._check_observation_age()
-                command = {
-                    "name": "move_gripper_m",
-                    "started_monotonic_s": self._monotonic(),
-                    "result": "failed",
-                }
-                self.last_action_telemetry["commands"].append(command)
-                self._gripper.move_gripper_m(gripper, force=self._safety.gripper_force_n)
-                self._raise_if_comm_error("gripper command")
-                command.update(ended_monotonic_s=self._monotonic(), result="sdk_returned")
-            except Exception as exc:
-                if command is not None:
-                    command["ended_monotonic_s"] = self._monotonic()
-                self._latch(PiperState.E_STOP, exc)
+            if self._teleop is not None and (
+                self._input_fault_requested.is_set() or not self._teleop.permits(action.epoch)
+            ):
+                return self._teleop_idle_locked(action)
+            if self._teleop is None or gripper != self._last_gripper_target:
+                command = None
+                try:
+                    self._require_active_locked("gripper command")
+                    assert self._gripper is not None
+                    assert self._safety is not None
+                    self._check_observation_age()
+                    command = {
+                        "name": "move_gripper_m",
+                        "target": gripper,
+                        "force": self._safety.gripper_force_n,
+                        "started_monotonic_s": self._monotonic(),
+                        "result": "failed",
+                    }
+                    self.last_action_telemetry["commands"].append(command)
+                    self._gripper.move_gripper_m(gripper, force=self._safety.gripper_force_n)
+                    self._raise_if_comm_error("gripper command")
+                    self._last_gripper_target = gripper
+                    command.update(ended_monotonic_s=self._monotonic(), result="sdk_returned")
+                    self._last_gripper_command = dict(command)
+                    if self._teleop is not None:
+                        self._teleop.gripper_target = gripper
+                except Exception as exc:
+                    if command is not None:
+                        command["ended_monotonic_s"] = self._monotonic()
+                    self._latch(PiperState.E_STOP, exc)
             self._raise_if_emergency_stop_requested_locked()
+            if self._teleop is not None and (
+                self._input_fault_requested.is_set() or not self._teleop.permits(action.epoch)
+            ):
+                return self._teleop_idle_locked(action)
             self._last_action_at = self._monotonic()
+            self._last_control_tick_s = self._last_action_at
+            self._last_gripper_target = gripper
             self.last_action_telemetry.update(
-                result="sdk_returned", values={key: float(action[key]) for key in ACTION_KEYS}
+                result="sdk_returned",
+                values={key: float(action[key]) for key in ACTION_KEYS},
+                retained_gripper_command=self._last_gripper_command,
             )
             return {key: float(action[key]) for key in ACTION_KEYS}
 

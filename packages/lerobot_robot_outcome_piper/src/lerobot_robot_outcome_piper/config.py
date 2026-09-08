@@ -78,6 +78,10 @@ class OutcomePiperXboxConfig(TeleoperatorConfig):
     axis_left_trigger: int
     axis_right_trigger: int
     hold_button: int
+    emergency_stop_button: int
+    hold_joint_tolerance_rad: float
+    hold_stable_time_s: float
+    hold_timeout_s: float
     deadzone: float
     control_hz: int
     xyz_step_m: float
@@ -103,8 +107,11 @@ class OutcomePiperXboxConfig(TeleoperatorConfig):
             self.axis_left_trigger,
             self.axis_right_trigger,
         )
-        if any(index < 0 for index in (*axes, self.hold_button)):
+        if any(index < 0 for index in (*axes, self.hold_button, self.emergency_stop_button)):
             raise ValueError("axis and button indices must be non-negative")
+        if self.hold_button == self.emergency_stop_button:
+            raise ValueError("hold and emergency-stop buttons must be distinct")
+        self.hold_settings()
         if len(set(axes)) != len(axes):
             raise ValueError("Xbox axis indices must be distinct")
         measured_floats = (
@@ -145,3 +152,10 @@ class OutcomePiperXboxConfig(TeleoperatorConfig):
             )
         ):
             raise ValueError("each trigger rest and pressed value must differ")
+
+    def hold_settings(self):
+        from .teleop_control import HoldSettings
+
+        return HoldSettings(
+            self.hold_joint_tolerance_rad, self.hold_stable_time_s, self.hold_timeout_s
+        )

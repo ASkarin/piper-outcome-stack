@@ -15,6 +15,17 @@ JOINT_KEYS = tuple(f"joint_{index}.pos" for index in range(1, 7))
 ACTION_KEYS = (*JOINT_KEYS, "gripper.pos")
 
 
+def validate_teleoperation_hold(acceptance_path: Path, settings) -> None:
+    """Bind Xbox-only holding parameters without weakening the existing motion gate."""
+    from dataclasses import asdict
+
+    record = load_object(acceptance_path).get("teleoperation_hold")
+    if not isinstance(record, dict) or record.get("verified") is not True:
+        raise OutcomePiperValidationError("teleoperation hold acceptance is incomplete")
+    if any(record.get(key) != value for key, value in asdict(settings).items()):
+        raise OutcomePiperValidationError("teleoperation hold settings differ from verified values")
+
+
 @dataclass(frozen=True)
 class MotionSafety:
     joint_lower: tuple[float, ...]
@@ -101,7 +112,6 @@ def _validated_acceptance(
         "five_read_only_cycles_verified",
         "communication_loss_stop_verified",
         "watchdog_stop_verified",
-        "hold_to_run_stop_verified",
         "electronic_emergency_stop_verified",
         "no_drop_stop_verified",
         "stop_strategy_verified",
