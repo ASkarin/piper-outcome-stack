@@ -94,6 +94,14 @@ class FeedbackReceiver:
             self.check_error()
             return copy.deepcopy(self.arm.get_arm_status()), self.received.get(0x2A1)
 
+    def driver_states(self):
+        with self.condition:
+            self.check_error()
+            return tuple(
+                (copy.deepcopy(self.arm.get_driver_states(index)), self.received.get(can_id))
+                for index, can_id in enumerate(self.DRIVER_IDS, start=1)
+            )
+
     def snapshot(self):
         with self.condition:
             self.check_error()

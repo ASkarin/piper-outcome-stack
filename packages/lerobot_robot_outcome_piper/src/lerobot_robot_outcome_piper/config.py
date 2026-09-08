@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 from lerobot.cameras.configs import CameraConfig, ColorMode
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig
@@ -15,17 +14,13 @@ from lerobot.teleoperators.config import TeleoperatorConfig
 from .timing import CaptureTiming
 
 
-Firmware = Literal["default", "v183", "v188", "v189"]
-ExecutionMode = Literal["read_only", "motion"]
-
-
 @RobotConfig.register_subclass("outcome_piper")
 @dataclass(kw_only=True)
 class OutcomePiperConfig(RobotConfig):
     can_interface: str
-    firmware: Firmware
+    firmware: str
     feedback_timeout_s: float
-    execution_mode: ExecutionMode = "read_only"
+    execution_mode: str = "read_only"
     safety_path: Path | None = None
     hardware_acceptance_path: Path | None = None
     cameras: dict[str, CameraConfig] = field(default_factory=dict)

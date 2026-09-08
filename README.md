@@ -1,7 +1,7 @@
 # PiPER OutcomeStack
 
 PiPER OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
-evaluation, and action-outcome stack for the standard PiPER. This repository is the
+evaluation, simulation/sim2real, and action-outcome stack for the standard PiPER. This repository is the
 code and experiment-evidence source. The control repository holds the roadmap, current
 status, decisions, and canonical planning records.
 
@@ -77,8 +77,7 @@ stable milestones; the same hardware and motion gates apply during development.
 
 The arm and camera have arrived (user confirmation, 2026-09-06); actual hardware gates
 are tracked separately from software readiness. The read-only SDK identity probe passed;
-five normal-plugin sessions, motion/stop behavior and real image/state/action timing
-acceptance remain open as described in the bring-up instructions. Run the doctor with the inspected
+five development-plugin read-only sessions and basic joint/gripper commissioning subsequently passed. Formal stop protection and real image/state/action timing acceptance remain open as described in the planning status. Run the doctor with the inspected
 `PIPER_D435_SERIAL`; both video and USB nodes require permission verification.
 
 ## Commands and verification
@@ -106,3 +105,17 @@ The fixed real-CAN namespace has no veth/NAT. `record` therefore requires
 The supported remote training environment is under `infra/container/`; the local
 controller deployment is under `infra/local-controller/`. Raw data, videos,
 checkpoints, and model weights must not enter Git.
+
+## Simulation / sim2real planning (2026-09-08)
+
+Simulation is now a core workstream with equal priority to ACT: model alignment, motion reproduction, a simulated reaching policy tested on the real arm, then task-A ACT comparisons (real-only, sim-only, sim-pretrained plus the same real subset). MuJoCo is the planned starting point, using the pinned official PiPER geometry. No simulator version, code, assets or environment has been installed/implemented by this documentation change.
+
+The user explicitly deferred implementation approval. Proposed `src/piper_outcome_stack/sim/`, `sim2real/`, `assets/piper/` and simulation/experiment configuration directories are designs, not existing runtime paths. ROS is not added to the control path; public task-A/B observations and actions retain one RGB image and seven rad/m values. Synthetic provenance cannot masquerade as physical SDK telemetry.
+
+See [planning amendment](docs/preregistration/PR-20260908-01.md). The canonical workstream and schedule live in the planning repository at `docs/roadmap/piper_sim2real_workstream.md`. The repaired source now binds `configs/project.json` to PR-20260908-01. Original preregistration snapshots and old releases retain their historical identities; the source change does not implement simulation. This document is not evidence of simulation or real-policy completion.
+
+## Existing-stack repair and synchronization
+
+The JSON configuration uses string annotations with explicit allowed-value checks, compatible with the pinned draccus decoder. Real CLI parsing regressions cover record and teleoperate. Motor enable sends once and waits for all six fresh driver flags instead of interpreting the SDK cached return as an acknowledgement.
+
+The maintained operator commissioning entry is `infra/acceptance/piper_joint_commission.py`, with `piper_motion_preflight.py` for read-only controller limits. The earlier J1-only script remains in diagnostic artifacts, not as another active entry. Commissioning is separate from the formal Robot gate and does not start on import or synchronize.

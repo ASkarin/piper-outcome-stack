@@ -416,9 +416,11 @@ class OutcomePiper(Robot):
                 self._state = PiperState.CONNECTED_DISABLED
                 self.get_observation()
                 if self.config.execution_mode == "motion":
-                    if not arm.enable():
-                        raise OutcomePiperStateError("PiPER enable did not confirm all joints")
+                    enable_requested_s = self._monotonic()
+                    # The SDK returns cached flags immediately after sending once.
+                    arm.enable()
                     self._raise_if_comm_error("enable")
+                    self._confirm_enabled_locked(enable_requested_s)
                     self._state = PiperState.ACTIVE
                     self._last_action_at = self._monotonic()
                     self._start_watchdog()
@@ -438,6 +440,33 @@ class OutcomePiper(Robot):
                 if isinstance(exc, OutcomePiperStateError) and str(exc) == message:
                     raise
                 raise OutcomePiperStateError(message) from exc
+
+    def _confirm_enabled_locked(self, requested_s: float) -> None:
+        deadline = requested_s + self.config.feedback_timeout_s
+        while self._monotonic() < deadline:
+            self._raise_if_emergency_stop_requested_locked()
+            self._feedback()
+            states = self._receiver.driver_states()
+            now = self._monotonic()
+            if now < requested_s:
+                raise OutcomePiperStateError("enable confirmation monotonic clock moved backwards")
+            confirmed = len(states) == 6
+            for state, received_s in states:
+                if state is None or received_s is None:
+                    confirmed = False
+                    continue
+                if not math.isfinite(received_s) or received_s < 0 or received_s > now:
+                    raise OutcomePiperStateError("invalid enable feedback receive timestamp")
+                if state.msg.foc_status.driver_error_status:
+                    raise OutcomePiperStateError("driver fault during enable confirmation")
+                if received_s < requested_s or not state.msg.foc_status.driver_enable_status:
+                    confirmed = False
+            if confirmed and self._monotonic() < deadline:
+                return
+            remaining = deadline - self._monotonic()
+            if remaining > 0:
+                self._emergency_stop_requested.wait(min(0.005, remaining))
+        raise OutcomePiperStateError("enable confirmation timed out; no command was resent")
 
     def _feedback(self) -> tuple[list[float], float]:
         if self._state in _TERMINAL_STATES:

@@ -24,3 +24,6 @@ checkpoints/
 # Generated container evidence and local deployment state.
 infra/container/*.local
 infra/container/environment-verification.json
+
+# macOS metadata is not release source.
+.DS_Store

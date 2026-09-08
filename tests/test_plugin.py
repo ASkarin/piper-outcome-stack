@@ -121,6 +121,21 @@ class FakeReceiver:
         status = self.arm.get_arm_status()
         return status, None if status is None else 100.0 + (status.timestamp - NOW)
 
+    def driver_states(self):
+        return tuple(
+            (
+                SimpleNamespace(
+                    msg=SimpleNamespace(
+                        foc_status=SimpleNamespace(
+                            driver_enable_status=self.arm.enabled, driver_error_status=False
+                        )
+                    )
+                ),
+                self.clock(),
+            )
+            for _ in range(6)
+        )
+
     def snapshot(self):
         frames = tuple(
             getattr(self.arm._parser, name, None) for name in ("joint_12", "joint_34", "joint_56")
@@ -188,6 +203,7 @@ class FakeArm:
         self.fail_feedback = False
         self.fail_command = False
         self.enable_result = True
+        self.enabled = False
         self.joints = [0.0] * 6
         self.status = 0
         self.error_code = 0
@@ -258,6 +274,7 @@ class FakeArm:
 
     def enable(self):
         self.calls.append("enable")
+        self.enabled = True
         return self.enable_result
 
     def electronic_emergency_stop(self):

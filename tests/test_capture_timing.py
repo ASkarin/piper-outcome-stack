@@ -291,3 +291,60 @@ def test_startup_waits_for_all_six_low_rate_driver_frames_in_each_session():
             assert len(rx.snapshot().received_s) == 5  # Policy timing schema is unchanged.
         finally:
             arm.get_context().comm = None
+
+
+def test_sdk_cached_false_does_not_fail_a_successful_enable_request(tmp_path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    arm.enable_result = False
+    try:
+        robot.connect()
+        assert robot.state is PiperState.ACTIVE
+        assert arm.calls.count("enable") == 1
+        assert "electronic_emergency_stop" not in arm.calls
+    finally:
+        robot.disconnect()
+
+
+@pytest.mark.parametrize("kind", ["delayed", "stale", "missing", "fault"])
+def test_enable_requires_new_complete_driver_flags_without_resending(tmp_path, kind):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    receiver = robot._receiver_factory(arm, arm.gripper, lambda: robot._monotonic())
+    robot._receiver_factory = lambda *args: receiver
+    clock = [100.0]
+    robot._monotonic = lambda: clock[0]
+    snapshots = receiver.snapshot
+
+    # Keep normal controller feedback fresh while deliberately delaying enable flags.
+    def fresh_snapshot():
+        return replace(snapshots(), received_s=(clock[0],) * 5)
+
+    receiver.snapshot = fresh_snapshot
+    calls = [0]
+
+    def driver_states():
+        calls[0] += 1
+        clock[0] += 0.0625
+        if kind == "missing":
+            return ((None, None),) * 6
+        enabled = kind != "delayed" or calls[0] >= 2
+        received = 99.0 if kind == "stale" else clock[0]
+        state = NS(
+            msg=NS(foc_status=NS(driver_enable_status=enabled, driver_error_status=kind == "fault"))
+        )
+        return ((state, received),) * 6
+
+    receiver.driver_states = driver_states
+    try:
+        if kind == "delayed":
+            robot.connect()
+            assert robot.state is PiperState.ACTIVE
+            assert calls[0] == 2
+        else:
+            with pytest.raises(RuntimeError, match="driver fault|enable confirmation timed out"):
+                robot.connect()
+            assert robot.state is PiperState.FAULT
+        assert arm.calls.count("enable") == 1
+        assert arm.gripper.commands == []
+        assert not any(isinstance(c, tuple) and c[0] == "move_j" for c in arm.calls)
+    finally:
+        robot.disconnect()

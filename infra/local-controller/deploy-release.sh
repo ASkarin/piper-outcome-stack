@@ -166,6 +166,9 @@ PIPER_RUNTIME_PLUGIN_DISCOVERY
         PYTEST_ADDOPTS="-p no:cacheprovider" \
         "${acceptance_python}" -m pytest --quiet \
         "${release}/tests/test_plugin.py" \
+        "${release}/tests/test_cli_config.py" \
+        "${release}/tests/test_joint_commission.py" \
+        "${release}/tests/test_motion_preflight.py" \
         "${release}/tests/test_capture_timing.py" \
         "${release}/tests/test_recording_telemetry.py" \
         "${release}/tests/test_piper_read_only_cycles.py" \
@@ -278,6 +281,9 @@ summary = {
             "status": "passed",
             "tests": [
                 "tests/test_plugin.py",
+                "tests/test_cli_config.py",
+                "tests/test_joint_commission.py",
+                "tests/test_motion_preflight.py",
                 "tests/test_capture_timing.py",
                 "tests/test_recording_telemetry.py",
                 "tests/test_piper_read_only_cycles.py",

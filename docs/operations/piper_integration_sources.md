@@ -93,3 +93,7 @@ installed or executed, and is not an additional runtime dependency.
 The reference therefore supplements the existing official HF LeRobot + AgileX SDK
 foundation. It does not currently supply a drop-in replacement for our PiPER plugin.
 No dependency lock, control route or hardware acceptance status changes from this review.
+
+## Simulation source selection — planning only
+
+MuJoCo plus the existing commit-pinned agx_arm_urdf is the approved planning direction. Simulator version, converted assets, actuator/contact/camera parameters, data provenance and tests require a subsequent implementation task. No dependency or runtime source lock changes in this documentation update. Simulation stays separate from real SDK execution and does not introduce an automatic hardware fallback or ROS control route.
