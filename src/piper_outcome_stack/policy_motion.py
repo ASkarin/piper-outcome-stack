@@ -8,7 +8,7 @@ from lerobot_robot_outcome_piper.processor import OutcomePiperAction
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.teleop_control import TeleopState
 
-from .policy_execution import predict_candidate
+from .policy_execution import CONTROL_PERIOD_S, POLICY_CAMERA, predict_candidate
 
 
 class PolicyInput:
@@ -54,7 +54,7 @@ def finish_hold(robot, control, inputs, observation, rows, clock, sleep):
         if control.hold_confirmed:
             return
         observation = robot.get_observation()
-        sleep(max(0, 0.02 - (clock() - start)))
+        sleep(max(0, CONTROL_PERIOD_S - (clock() - start)))
 
 
 def run_policy_trial(robot, teleop, control, predictor, safety, rows, **budgets):
@@ -122,9 +122,9 @@ def _run_policy_trial(
         if intent == "run":
             if frame_recorder is not None:
                 telemetry = row["input_telemetry"]
-                camera = telemetry.get("cameras", {}).get("d435", {})
+                camera = telemetry.get("cameras", {}).get(POLICY_CAMERA, {})
                 row["rgb_recording"] = frame_recorder.submit(
-                    observation["d435"],
+                    observation[POLICY_CAMERA],
                     {
                         "row_index": len(rows) - 1,
                         "observation_sequence": telemetry["sequence"],
@@ -182,7 +182,7 @@ def _run_policy_trial(
                 )
                 ready_announced = True
         row["cycle_work_s"] = clock() - start
-        sleep(max(0, 0.02 - (clock() - start)))
+        sleep(max(0, CONTROL_PERIOD_S - (clock() - start)))
     finish_hold(robot, control, inputs, observation, rows, clock, sleep)
     return dict(
         status="segment_ended_held",

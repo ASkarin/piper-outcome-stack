@@ -9,7 +9,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from piper_outcome_stack.policy_execution import ACTChunkPredictor
+from piper_outcome_stack.policy_execution import (
+    CONTROL_HZ,
+    ACTChunkPredictor,
+    verify_reference_inputs,
+)
 from piper_outcome_stack.policy_motion import PolicyInput, run_policy_trial
 
 
@@ -51,6 +55,10 @@ def main():
         help="TE on decoded absolute chunks; standard ACT coefficient is 0.01",
     )
     parser.add_argument(
+        "--position",
+        help="operator start-position label (e.g. P1); outcome is labeled after the run",
+    )
+    parser.add_argument(
         "--duration-s",
         type=float,
         help="optional duration budget; omitted means run until operator cancels",
@@ -75,7 +83,7 @@ def main():
     teleop_cfg = draccus.decode(TeleoperatorConfig, config["teleop"])
     if not isinstance(robot_cfg, OutcomePiperConfig) or robot_cfg.execution_mode != "motion":
         raise ValueError("trial requires explicit PiPER motion configuration")
-    if not isinstance(teleop_cfg, OutcomePiperXboxConfig) or teleop_cfg.control_hz != 50:
+    if not isinstance(teleop_cfg, OutcomePiperXboxConfig) or teleop_cfg.control_hz != CONTROL_HZ:
         raise ValueError("trial requires the measured Xbox configuration at 50Hz")
     if robot_cfg.capture_timing is None:
         raise ValueError("trial requires measured capture timing")
@@ -88,7 +96,10 @@ def main():
             safety=asdict(safety),
             checkpoint=str(args.checkpoint),
             reference_inputs=str(args.reference_inputs),
-            max_policy_actions=None if args.duration_s is None else math.ceil(50 * args.duration_s),
+            position=args.position,
+            max_policy_actions=None
+            if args.duration_s is None
+            else math.ceil(CONTROL_HZ * args.duration_s),
             max_run_s=args.duration_s,
             rows=[],
         )
@@ -106,27 +117,9 @@ def main():
                 args.checkpoint,
                 joint_representation=args.joint_representation,
             )
-            report["reference_errors"] = []
-            with np.load(args.reference_inputs) as data:
-                images, states, expected = (
-                    data["images"],
-                    data["states"],
-                    data["expected_absolute_chunks"],
-                )
-            for i in range(len(states)):
-                chunk = predictor.predict(images[i], states[i])
-                delta = abs(chunk - expected[i])
-                joint, grip = float(delta[:, :6].max()), float(delta[:, 6].max())
-                if joint >= 1e-4 or grip >= 1e-5:
-                    raise ValueError(
-                        f"reference mismatch: sample={i}, joint={joint}, gripper={grip}"
-                    )
-                bounds = recorded_target_check(states[i], chunk[0], safety)
-                report["reference_errors"].append(
-                    dict(sample=i, joint_rad=joint, gripper_m=grip, recorded_target_check=bounds)
-                )
-            for i in range(30):
-                predictor.predict(images[i % len(states)], states[i % len(states)])
+            images, states, report["reference_errors"] = verify_reference_inputs(
+                predictor, args.reference_inputs, safety
+            )
             predictor.configure_temporal_ensemble(args.temporal_ensemble_coeff)
             predictor.configure_action_steps(args.n_action_steps)
             if args.temporal_ensemble_coeff is not None:
@@ -235,12 +228,15 @@ def main():
         finally:
             try:
                 if robot is not None:
-                    report.update(
-                        stop_outcome=robot.stop_outcome,
-                        stop_error=robot.stop_error,
-                        last_action_telemetry=robot.last_action_telemetry,
-                    )
-                    robot.disconnect()
+                    try:
+                        robot.disconnect()
+                    finally:
+                        # disconnect() can still latch a requested electronic stop.
+                        report.update(
+                            stop_outcome=robot.stop_outcome,
+                            stop_error=robot.stop_error,
+                            last_action_telemetry=robot.last_action_telemetry,
+                        )
             except Exception as exc:
                 report.update(status="failed", disconnect_error=str(exc))
                 raise

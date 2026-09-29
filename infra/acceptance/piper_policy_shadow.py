@@ -9,7 +9,13 @@ import time
 import numpy as np
 import torch
 
-from piper_outcome_stack.policy_execution import ACTChunkPredictor, run_shadow
+from piper_outcome_stack.policy_execution import (
+    CONTROL_HZ,
+    POLICY_CAMERA,
+    ACTChunkPredictor,
+    run_shadow,
+    verify_reference_inputs,
+)
 
 
 def metrics(values):
@@ -39,7 +45,6 @@ def main():
     from lerobot.robots.config import RobotConfig
     from lerobot_robot_outcome_piper import OutcomePiper, OutcomePiperConfig
     from lerobot_robot_outcome_piper.safety import ACTION_KEYS, load_motion_safety
-    from lerobot_robot_outcome_piper.execution_constraints import check_execution_target
 
     raw = json.loads(args.config.read_text())
     config = draccus.decode(RobotConfig, raw)
@@ -58,7 +63,7 @@ def main():
             checkpoint=str(args.checkpoint),
             reference_inputs=str(args.reference_inputs),
             device="cuda",
-            fps=50,
+            fps=CONTROL_HZ,
             n_action_steps=1,
             rows=[],
             motion_commands_sent=False,
@@ -70,21 +75,17 @@ def main():
         try:
             torch.set_num_threads(4)
             predictor = ACTChunkPredictor.from_checkpoint(args.checkpoint)
-            with np.load(args.reference_inputs) as data:
-                images, states = data["images"], data["states"]
-                expected = data["expected_absolute_chunks"]
-            errors = []
-            for i in range(len(states)):
-                difference = np.abs(predictor.predict(images[i], states[i]) - expected[i])
-                joint, gripper = float(difference[:, :6].max()), float(difference[:, 6].max())
-                if joint >= 1e-4 or gripper >= 1e-5:
-                    raise ValueError(f"reference mismatch at sample {i}: {joint}, {gripper}")
-                # Initialize FK/geometry and check real candidates before live input capture.
-                check_execution_target(states[i], expected[i, 0], safety)
-                errors.append(dict(sample=i, joint_rad=joint, gripper_m=gripper))
-            report["reference_errors"] = errors
-            for i in range(30):
-                predictor.predict(images[i % len(images)], states[i % len(states)])
+            # Also initializes FK/geometry before live input capture.
+            images, states, report["reference_errors"] = verify_reference_inputs(
+                predictor, args.reference_inputs, safety
+            )
+            rejected = [
+                r
+                for r in report["reference_errors"]
+                if r["recorded_target_check"]["status"] != "passed"
+            ]
+            if rejected:  # Shadow keeps its stricter rule: recorded candidates must all pass.
+                raise ValueError(f"recorded candidate rejected: {rejected[0]}")
 
             if args.mode == "live":
                 robot = OutcomePiper(config)
@@ -105,10 +106,10 @@ def main():
                             oldest_received_monotonic_s=time.monotonic(),
                             timestamp_source="synthetic_for_software_path_only",
                         )
-                        return {**dict(zip(ACTION_KEYS, states[i])), "d435": images[i]}
+                        return {**dict(zip(ACTION_KEYS, states[i])), POLICY_CAMERA: images[i]}
 
                 robot = RecordedSource()
-            run_shadow(robot, predictor, safety, args.cycles, 50, report["rows"])
+            run_shadow(robot, predictor, safety, args.cycles, CONTROL_HZ, report["rows"])
             report["status"] = "completed"
         except BaseException as exc:
             report.update(

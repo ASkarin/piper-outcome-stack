@@ -9,6 +9,7 @@ from piper_outcome_stack.policy_execution import (
     check_policy_observation,
     predict_candidate,
     run_shadow,
+    verify_reference_inputs,
 )
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 
@@ -146,3 +147,44 @@ def test_shadow_uses_fresh_observations_and_never_dispatches(monkeypatch):
     robot.config = NS(execution_mode="motion", capture_timing=robot.config.capture_timing)
     with pytest.raises(ValueError, match="read_only"):
         run_shadow(robot, predictor(), None, 3, 50, [], lambda: 1.0, lambda _: None)
+
+
+def _reference(tmp_path, n=2, offset=0.0):
+    p = predictor()
+    images = np.zeros((n, 2, 2, 3), np.uint8)
+    states = np.zeros((n, 7), np.float32)
+    expected = np.stack([p.predict(images[i], states[i]) for i in range(n)]) + offset
+    path = tmp_path / "reference.npz"
+    np.savez(path, images=images, states=states, expected_absolute_chunks=expected)
+    return p, path
+
+
+def test_reference_inputs_report_rejections_without_raising(tmp_path, monkeypatch):
+    import lerobot_robot_outcome_piper.execution_constraints as constraints
+
+    def check(state, target, safety):
+        raise ValueError("outside workspace")
+
+    monkeypatch.setattr(constraints, "check_execution_target", check)
+    p, path = _reference(tmp_path)
+    images, states, rows = verify_reference_inputs(p, path, None, warmup=3)
+    assert len(images) == len(states) == 2
+    assert [r["recorded_target_check"]["status"] for r in rows] == ["rejected", "rejected"]
+
+
+def test_reference_inputs_reject_mismatch_and_empty(tmp_path, monkeypatch):
+    import lerobot_robot_outcome_piper.execution_constraints as constraints
+
+    monkeypatch.setattr(constraints, "check_execution_target", lambda *a: None)
+    p, path = _reference(tmp_path, offset=1e-3)
+    with pytest.raises(ValueError, match="reference mismatch"):
+        verify_reference_inputs(p, path, None)
+    empty = tmp_path / "empty.npz"
+    np.savez(
+        empty,
+        images=np.zeros((0, 2, 2, 3), np.uint8),
+        states=np.zeros((0, 7)),
+        expected_absolute_chunks=np.zeros((0, 3, 7)),
+    )
+    with pytest.raises(ValueError, match="non-empty"):
+        verify_reference_inputs(p, empty, None)

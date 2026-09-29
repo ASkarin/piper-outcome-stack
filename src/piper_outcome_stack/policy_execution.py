@@ -6,6 +6,12 @@ import time
 import numpy as np
 import torch
 
+# Checkpoint contract: trained at 50Hz control/Dataset with one RGB feature named d435.
+CONTROL_HZ = 50
+CONTROL_PERIOD_S = 1 / CONTROL_HZ
+POLICY_CAMERA = "d435"
+IMAGE_FEATURE = f"observation.images.{POLICY_CAMERA}"
+
 
 def validate_action_processors(pre, post, joint_representation):
     from lerobot.processor.relative_action_processor import (
@@ -152,14 +158,13 @@ class ACTChunkPredictor:
 
     def predict(self, image, state):
         state = np.asarray(state, dtype=np.float32)
-        shape = self.model.config.input_features["observation.images.d435"].shape
+        shape = self.model.config.input_features[IMAGE_FEATURE].shape
         if image.dtype != np.uint8 or image.shape != (shape[1], shape[2], shape[0]):
             raise ValueError("policy requires checkpoint-shaped HWC RGB uint8 input")
         if state.shape != (7,) or not np.isfinite(state).all():
             raise ValueError("policy requires seven finite observed rad/m values")
         batch = {
-            "observation.images.d435": torch.from_numpy(image).permute(2, 0, 1).contiguous().float()
-            / 255.0,
+            IMAGE_FEATURE: torch.from_numpy(image).permute(2, 0, 1).contiguous().float() / 255.0,
             "observation.state": torch.from_numpy(state.copy()),
         }
         with torch.inference_mode():
@@ -170,6 +175,36 @@ class ACTChunkPredictor:
         if chunk.shape != (self.model.config.chunk_size, 7) or not np.isfinite(chunk).all():
             raise ValueError("invalid absolute ACT action chunk")
         return chunk
+
+
+def verify_reference_inputs(predictor, path, safety, *, warmup=30):
+    """Reproduce recorded reference chunks, check first targets, then warm up.
+
+    Returns (images, states, rows); each row keeps the target check as a report entry.
+    """
+    from lerobot_robot_outcome_piper.execution_constraints import check_execution_target
+
+    with np.load(path) as data:
+        images, states = data["images"], data["states"]
+        expected = data["expected_absolute_chunks"]
+    if len(states) == 0 or len(images) != len(states) or len(expected) != len(states):
+        raise ValueError("reference inputs need matching, non-empty images/states/chunks")
+    rows = []
+    for i in range(len(states)):
+        chunk = predictor.predict(images[i], states[i])
+        delta = np.abs(chunk - expected[i])
+        joint, grip = float(delta[:, :6].max()), float(delta[:, 6].max())
+        if joint >= 1e-4 or grip >= 1e-5:
+            raise ValueError(f"reference mismatch: sample={i}, joint={joint}, gripper={grip}")
+        try:
+            check_execution_target(states[i], chunk[0], safety)
+            bounds = dict(status="passed")
+        except ValueError as exc:
+            bounds = dict(status="rejected", reason=str(exc))
+        rows.append(dict(sample=i, joint_rad=joint, gripper_m=grip, recorded_target_check=bounds))
+    for i in range(warmup):
+        predictor.predict(images[i % len(states)], states[i % len(states)])
+    return images, states, rows
 
 
 def check_policy_observation(telemetry, timing, now):
@@ -194,7 +229,7 @@ def predict_candidate(predictor, observation, telemetry, timing, safety, clock=t
     check_policy_observation(telemetry, timing, started)
     state = [float(observation[k]) for k in ACTION_KEYS]
     chunk, chunk_index, inferred = predictor.execution_chunk(
-        observation["d435"],
+        observation[POLICY_CAMERA],
         state,
         telemetry["sequence"],
     )

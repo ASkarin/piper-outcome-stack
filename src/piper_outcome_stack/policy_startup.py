@@ -9,6 +9,7 @@ from lerobot_robot_outcome_piper.teleop_control import TeleopState
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.workflows import _processor
 
+from .policy_execution import CONTROL_PERIOD_S
 from .policy_motion import finish_hold
 
 
@@ -141,7 +142,7 @@ def prepare_work_pose(
                 stage = "move"
             elif stage == "move" and control.state is not TeleopState.POSE_MOVING:
                 raise ValueError("A pose execution cancelled before arrival")
-            sleep(max(0, 0.02 - (clock() - started)))
+            sleep(max(0, CONTROL_PERIOD_S - (clock() - started)))
     except (Exception, KeyboardInterrupt) as exc:
         if robot.state is PiperState.ACTIVE:
             robot.request_input_fault(exc)

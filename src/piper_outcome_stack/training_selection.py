@@ -5,10 +5,16 @@ import json
 from pathlib import Path
 
 
+def is_successful_demonstration(outcome):
+    return outcome.get("task_outcome") == "success" and outcome.get("data_valid") is True
+
+
 def xbox_outcomes(root):
+    from lerobot_robot_outcome_piper.raw_io import read_jsonl
+
     outcomes = {}
     for path in (Path(root) / "telemetry").glob("*/events.jsonl"):
-        events = [json.loads(line) for line in path.open()]
+        events = read_jsonl(path)
         saved = {
             (e["episode_index"], e["attempt"]) for e in events if e["event"] == "episode_saved"
         }
@@ -28,8 +34,7 @@ def require_successful_selection(root, episodes):
         )
     outcomes = xbox_outcomes(root)
     for index in episodes:
-        e = outcomes.get(index, {})
-        if e.get("task_outcome") != "success" or e.get("data_valid") is not True:
+        if not is_successful_demonstration(outcomes.get(index, {})):
             raise ValueError(f"episode {index} is not an explicitly successful valid demonstration")
 
 
@@ -44,9 +49,7 @@ def prepare(config_path, output_config, validation_episodes):
     dataset = LeRobotDataset(cfg["dataset"]["repo_id"], root=root)
     audit = verify_telemetry(root, dataset)
     outcomes = xbox_outcomes(root)
-    successful = sorted(
-        i for i, e in outcomes.items() if e["task_outcome"] == "success" and e["data_valid"] is True
-    )
+    successful = sorted(i for i, e in outcomes.items() if is_successful_demonstration(e))
     require_successful_selection(root, validation_episodes)
     training = [i for i in successful if i not in validation_episodes]
     if not training:

@@ -72,6 +72,7 @@ def test_trial_gc_restores_after_device_cleanup(tmp_path, monkeypatch, failure):
         def disconnect(self):
             assert not gc.isenabled()
             events.append("robot_disconnect")
+            self.stop_outcome = "electronic_stop_sent_unverified"  # Latched during disconnect.
 
     class Teleop:
         def __init__(self, cfg):
@@ -117,6 +118,11 @@ def test_trial_gc_restores_after_device_cleanup(tmp_path, monkeypatch, failure):
     )
     monkeypatch.setattr(module.ACTChunkPredictor, "from_checkpoint", lambda *a, **k: predictor)
     monkeypatch.setattr(module, "recorded_target_check", lambda *a: {"status": "passed"})
+    monkeypatch.setattr(
+        module,
+        "verify_reference_inputs",
+        lambda *a, **k: (np.zeros((1, 2, 2, 3), np.uint8), np.zeros((1, 7)), []),
+    )
 
     def run(*a, **k):
         assert not gc.isenabled()
@@ -172,8 +178,10 @@ def test_trial_gc_restores_after_device_cleanup(tmp_path, monkeypatch, failure):
             < events.index("recorder_close")
         )
         if failure != "recorder":
-            runtime = json.loads(output.read_text())["policy_runtime"]
+            result = json.loads(output.read_text())
+            runtime = result["policy_runtime"]
             assert runtime["automatic_cyclic_gc_deferred"] and runtime["restored"]
+            assert result["stop_outcome"] == "electronic_stop_sent_unverified"
     finally:
         if not before:
             gc.disable()

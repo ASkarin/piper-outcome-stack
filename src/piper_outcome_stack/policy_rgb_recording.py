@@ -12,11 +12,14 @@ from PIL import Image
 class PolicyRGBRecorder:
     """Single control-thread producer, bounded queue, one PNG writer thread."""
 
+    MAX_FPS = 10
+    QUEUE_CAPACITY = 8
+
     def __init__(self, directory):
         self.directory = Path(directory)
         self.directory.mkdir(exist_ok=False)
         self._index = (self.directory / "frames.jsonl").open("x")
-        self._queue = Queue(maxsize=8)
+        self._queue = Queue(maxsize=self.QUEUE_CAPACITY)
         self._stop = Event()
         self._next_due = float("-inf")
         self.sampled = self.submitted = self.written = self.dropped = 0
@@ -29,7 +32,7 @@ class PolicyRGBRecorder:
         if now < self._next_due:
             return None
         started = time.perf_counter()
-        self._next_due = now + 0.1
+        self._next_due = now + 1 / self.MAX_FPS
         frame_id = self.sampled
         self.sampled += 1
         result = {"frame_id": frame_id}
@@ -81,8 +84,8 @@ class PolicyRGBRecorder:
         return {
             "directory": str(self.directory),
             "format": "lossless PNG RGB",
-            "max_fps": 10,
-            "queue_capacity": 8,
+            "max_fps": self.MAX_FPS,
+            "queue_capacity": self.QUEUE_CAPACITY,
             "sampled": self.sampled,
             "submitted": self.submitted,
             "written": self.written,
