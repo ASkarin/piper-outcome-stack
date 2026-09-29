@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import math
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -43,6 +44,10 @@ class FeedbackReceiver:
         self.arm, self.gripper, self.clock = arm, gripper, clock
         self.condition = threading.Condition(threading.RLock())
         self.received = {}
+        self.joint_max_skew_s = None
+        self.snapshot_wait_s = 0.0
+        self.snapshot_wait_service = None
+        self.last_snapshot_wait_s = 0.0
         self.error = None
         self.last_received = None
         comm = arm.get_context().get_comm()
@@ -102,7 +107,39 @@ class FeedbackReceiver:
                 for index, can_id in enumerate(self.DRIVER_IDS, start=1)
             )
 
+    def _joint_skew_ready(self):
+        times = [self.received[key] for key in self.IDS[:3]]
+        return self.joint_max_skew_s is None or max(times) - min(times) <= self.joint_max_skew_s
+
     def snapshot(self):
+        deadline = time.monotonic() + self.snapshot_wait_s
+        self.last_snapshot_wait_s = 0.0
+        while True:
+            with self.condition:
+                self.check_error()
+                if any(key not in self.received for key in self.IDS):
+                    raise RuntimeError("incomplete received feedback groups")
+                if self._joint_skew_ready():
+                    return self._snapshot_locked()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    times = tuple(self.received[key] for key in self.IDS[:3])
+                    raise RuntimeError(
+                        f"no coherent joint feedback within {self.snapshot_wait_s:.6f}s: "
+                        f"received_s={times}, limit_s={self.joint_max_skew_s}"
+                    )
+            # Do not hold the SDK parser lock while servicing an already-requested stop.
+            if self.snapshot_wait_service is not None:
+                self.snapshot_wait_service()
+            with self.condition:
+                started = time.monotonic()
+                self.condition.wait_for(
+                    lambda: self.error is not None or self._joint_skew_ready(),
+                    timeout=max(0.0, deadline - started),
+                )
+                self.last_snapshot_wait_s += time.monotonic() - started
+
+    def _snapshot_locked(self):
         with self.condition:
             self.check_error()
             if any(key not in self.received for key in self.IDS):

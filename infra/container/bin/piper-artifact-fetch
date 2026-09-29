@@ -9,23 +9,18 @@ import sys
 import uuid
 from pathlib import Path
 
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-os.environ["HF_HUB_OFFLINE"] = "0"
-
 for candidate in (
+    Path(__file__).resolve().parents[1] / "lib",
     Path("/workspace/piper/lib"),
     Path("/usr/local/lib/piper-container"),
-    Path(__file__).resolve().parents[1] / "lib",
 ):
-    if candidate.is_dir():
+    if (candidate / "piper_container_common.py").is_file():
         sys.path.insert(0, str(candidate))
         break
 
 from piper_container_common import (  # noqa: E402
     PIPER_ROOT,
     ARTIFACT_MANIFEST_NAME,
-    MIN_FREE_BYTES,
-    MIRROR_ENDPOINT,
     WARN_FREE_BYTES,
     PiperContainerError,
     atomic_write_json,
@@ -41,26 +36,29 @@ from piper_container_common import (  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fetch a commit-pinned Hugging Face artifact through hf-mirror.com"
+        description="Fetch a Hugging Face artifact and record its resolved commit"
     )
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--revision", required=True)
+    parser.add_argument("--revision", default="main", help="commit, branch or tag")
+    parser.add_argument("--endpoint", help="default: HF_ENDPOINT or Hugging Face official endpoint")
     parser.add_argument("--type", required=True, choices=("model", "dataset"))
     args = parser.parse_args()
 
     try:
         repo_id = validate_repo_id(args.repo)
-        revision = validate_revision(args.revision)
+        endpoint = args.endpoint or os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+        from huggingface_hub import HfApi
+
+        info = HfApi(endpoint=endpoint).repo_info(
+            repo_id=repo_id, repo_type=args.type, revision=args.revision
+        )
+        revision = validate_revision(info.sha)
         runtime = load_runtime_config()
         user = pwd.getpwuid(os.getuid()).pw_name
         if user not in {runtime["admin_user"], runtime["collaborator_user"]}:
             raise PiperContainerError(f"user {user} is not an PiPER project member")
 
         available = free_bytes(Path("/workspace"))
-        if available < MIN_FREE_BYTES:
-            raise PiperContainerError(
-                f"download blocked: workspace free space is below {MIN_FREE_BYTES} bytes"
-            )
         if available < WARN_FREE_BYTES:
             print(
                 f"warning: workspace free space is below {WARN_FREE_BYTES} bytes",
@@ -83,6 +81,7 @@ def main() -> int:
                 repo_type=args.type,
                 revision=revision,
                 local_dir=partial,
+                endpoint=endpoint,
             )
             local_hf_cache = partial / ".cache"
             if local_hf_cache.exists():
@@ -95,7 +94,8 @@ def main() -> int:
                 "artifact_type": args.type,
                 "repo_id": repo_id,
                 "revision": revision,
-                "source_endpoint": MIRROR_ENDPOINT,
+                "source_endpoint": endpoint,
+                "requested_revision": args.revision,
                 "fetched_at_utc": utc_now(),
                 "fetched_by": user,
                 "files": files,

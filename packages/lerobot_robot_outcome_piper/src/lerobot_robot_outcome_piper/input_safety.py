@@ -9,6 +9,7 @@ from typing import Iterator, Protocol
 
 class EmergencyStopTarget(Protocol):
     def request_emergency_stop(self, cause: BaseException | str) -> None: ...
+    def request_input_fault(self, cause: BaseException | str) -> None: ...
 
 
 _motion_session: ContextVar[EmergencyStopTarget | None] = ContextVar(
@@ -49,3 +50,10 @@ def request_input_emergency_stop(cause: BaseException | str) -> None:
     robot = _motion_session.get()
     if robot is not None:
         robot.request_emergency_stop(cause)
+
+
+def request_input_fault_hold(cause: BaseException | str) -> None:
+    """Input loss or timeout may hold a healthy arm, then end this session."""
+    robot = _motion_session.get()
+    if robot is not None:
+        robot.request_input_fault(cause)

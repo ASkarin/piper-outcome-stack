@@ -1,0 +1,29 @@
+{
+  "robot": {
+    "type": "outcome_piper",
+    "can_interface": "can0",
+    "firmware": "v189",
+    "feedback_timeout_s": 0.2,
+    "execution_mode": "read_only",
+    "scene": {
+      "scene_id": null,
+      "base_installation": null,
+      "camera_view": null,
+      "work_area_notes": null,
+      "camera_to_base_calibration": null
+    },
+    "cameras": {
+      "d435": {
+        "type": "intelrealsense",
+        "serial_number_or_name": "Intel RealSense D435",
+        "width": 640,
+        "height": 480,
+        "fps": 60,
+        "use_rgb": true,
+        "use_depth": true,
+        "warmup_s": 3
+      }
+    },
+    "capture_timing": null
+  }
+}

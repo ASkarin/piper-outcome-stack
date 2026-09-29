@@ -54,9 +54,7 @@ multiplier here would incorrectly double the command.
 
 ## Single-camera integration
 
-The single D435 uses the pinned LeRobot RealSense implementation with an inspected
-serial and RGB stream profile. The policy schema has exactly one image key,
-`observation.images.d435`; depth is inspected and calibrated separately. The 2026-09-06
+The current D435 is a default configuration. The pinned RealSense backend supports configured logical names, device selection and RGB/depth streams; capture schema and policy inputs are separate. The 2026-09-06
 review uses the pinned SDK's [PiPER API](https://github.com/agilexrobotics/pyAgxArm/blob/799b8412fbe8b9156bc9892d3dbeb2df7e98be71/docs/piper/piper_api.md)
 and [firmware reference](https://github.com/agilexrobotics/pyAgxArm/blob/799b8412fbe8b9156bc9892d3dbeb2df7e98be71/docs/piper/firmware_reference.md).
 See [bring-up](piper_bringup.md) for the current acceptance order and unresolved gaps.
@@ -97,3 +95,5 @@ No dependency lock, control route or hardware acceptance status changes from thi
 ## Simulation source selection — planning only
 
 MuJoCo plus the existing commit-pinned agx_arm_urdf is the approved planning direction. Simulator version, converted assets, actuator/contact/camera parameters, data provenance and tests require a subsequent implementation task. No dependency or runtime source lock changes in this documentation update. Simulation stays separate from real SDK execution and does not introduce an automatic hardware fallback or ROS control route.
+
+Current camera/depth behavior is documented in [RGBD capture](camera_rgbd.md).

@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## PiPER transfer preference (2026-09-23)
+
+For authorized data/model transfers, initiate the connection on `piper-local` through its verified `piper-training` SSH alias. Push data or pull models directly between those machines; do not relay through Mac. Long transfers run as independent background jobs on local with persistent logs/status, so Mac→local SSH interruption does not stop them. Resolve connection parameters from local's own SSH configuration; do not copy Mac credentials or silently fall back to a Mac relay. This does not authorize hardware I/O or unrelated infrastructure changes.
+
 ## HERO 反过度防御约束
 
 来源：`wanshuiyin/HERO-Anti-OverDefense`。本块约束修法范围，不压掉真实问题或本项目明确要求的安全、迁移与验证工作。
@@ -31,10 +35,28 @@
 答不上来就别跑。
 对的就说对。不要为了交差硬找问题。
 
+## Validation by change scope
+
+Daily debugging does not require a full CI run, commit, push, or release. Check new evidence for log/input/hardware measurements; use syntax and affected tests for local diagnostic edits. Connection, mode, holding and fault-handling changes require affected offline regressions and the corresponding separately authorized hardware verification. Run full CI for stage merges, formal releases or substantial cross-module changes, preserving required merge checks. For synchronization of identical validated code, check version/import paths and only necessary short smoke checks. Unrelated simulation and container jobs do not block local robot debugging. Keep failed evidence and actual device permissions and runtime checks; do not mark commissioning as formal acceptance.
+
+The current GitHub workflow automatically runs on PR updates, including draft PRs. Do not repeatedly push or dispatch full CI just to proceed with a local debugging step. Documentation-only changes do not require software test suites.
+
+## Runtime validation instead of planned acceptance gates
+
+The user removed speculative hardware-acceptance startup gates. Do not require acceptance files/booleans, physical-estop identifiers, no-drop attestations or safety-file digest bindings. Do not recreate them as permits, aliases or another backend. Keep explicit read-only/motion intent, live firmware compatibility, fresh feedback, numerical joint/workspace/gripper limits, bounded actions, shoulder holding and B stop. Record actual descent/stop behavior honestly. The approved piper-query exception permits four fixed query operations, not arbitrary sudo or motion.
+
 ## Approved planning scope, 2026-09-08
 
-Simulation/sim2real is a core workstream alongside real ACT learning and action-outcome prediction. The planning repository's `docs/roadmap/piper_sim2real_workstream.md` defines S0–S3 and the three ACT data-source comparisons. This approval is documentation-only: code, tests, runtime configs, dependency locks/installations, assets, experiments and hardware execution await explicit subsequent approval. The existing SDK/LeRobot control path stays unchanged. The user subsequently approved repairs and device code synchronization. This authorizes the existing-stack fixes and binding PR-20260908-01, but still does not authorize simulation implementation or hardware motion.
+Simulation/sim2real is a core workstream alongside real ACT learning and action-outcome prediction. The planning repository's `docs/roadmap/piper_sim2real_workstream.md` defines S0–S3 and the three ACT data-source comparisons. This approval is documentation-only: code, tests, runtime configs, dependency locks/installations, assets, experiments and hardware execution await explicit subsequent approval. The existing SDK/LeRobot control path stays unchanged. The user subsequently approved repairs and device code synchronization. This authorizes the existing-stack fixes and binding PR-20260908-01, but still does not authorize simulation implementation or hardware motion. Runtime `configs/project.json` now binds PR-20260909-01; PR-20260921-01 is the latest amendment.
 
 ## S0/S1 implementation approval
 
 The user explicitly approved the S0/S1 implementation plan: isolated MuJoCo environment, pinned PiPER model, geometry checks and archived motion replay. No hardware I/O, S2/S3 training, shared training-environment changes or formal release deployment is authorized. Table/camera and servo parameters remain simulation-only and unidentified.
+
+## 2026-09-17 approved training development workflow
+
+The user approved implementing the training workflow simplification. In authorized interactive tasks, the assistant may install needed Python/user tools and use container sudo for system tools directly on `piper-training`; no image build, PR, release, or prior lockfile update is needed. This supersedes the earlier shared-training-environment change restriction for this workflow. Host/driver/Docker and real-device changes remain separate.
+
+The administrator's current editable checkout is `/workspace/projects/piper-outcome-stack`; preserve its uncommitted work. Personal editable environments may reuse shared dependencies; collaborators independently install personal packages and run development/formal jobs without shared-environment writes or sudo. Code edits run after process restart. Shared packages are not modified under tasks that use them.
+
+Development GPU runs allow dirty source and record provenance. `--formal` uses a fixed commit, actual environment/config and versioned data; no merged PR or project release required. Dataset promotion is a publication step, not a training gate. Follow `infra/container/README.md`. Scheduled reviews remain remote read-only; this approval does not launch stage-2 research training or hardware work.

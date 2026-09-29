@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -17,7 +18,6 @@ SHARED_PYTHON_ENV = PIPER_ROOT / "python-env"
 PYTHON_HISTORY_ROOT = PIPER_ROOT / "python-env-history"
 ARTIFACT_MANIFEST_NAME = "piper-artifact-manifest.json"
 MIRROR_ENDPOINT = "https://hf-mirror.com"
-MIN_FREE_BYTES = 200 * 1024**3
 WARN_FREE_BYTES = 300 * 1024**3
 MIN_SHM_BYTES = 16 * 1024**3
 
@@ -228,3 +228,74 @@ def gpu_inventory() -> list[dict[str, Any]]:
 
 def manifest_hash(path: Path) -> str:
     return sha256_file(path.resolve(strict=True))
+
+
+def selected_python(value: str | None = None) -> str:
+    """Select a development interpreter without resolving its venv symlink."""
+    if value is None:
+        active = os.environ.get("VIRTUAL_ENV")
+        value = str(Path(active) / "bin/python") if active else "python"
+    executable = shutil.which(value)
+    if executable is None:
+        raise PiperContainerError(f"Python interpreter is unavailable: {value}")
+    return os.path.abspath(executable)
+
+
+def python_environment(executable: str) -> tuple[dict[str, Any], str]:
+    result = subprocess.run(
+        [
+            executable,
+            "-c",
+            "import json,sys; print(json.dumps(dict(executable=sys.executable, "
+            "version=sys.version.split()[0], prefix=sys.prefix)))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    identity = json.loads(result.stdout)
+    packages = (
+        subprocess.run(
+            [
+                executable,
+                "-c",
+                "from importlib.metadata import distributions; "
+                'print("\\n".join(sorted(d.metadata["Name"]+"=="+d.version for d in distributions())))',
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.rstrip("\n")
+        + "\n"
+    )
+    return identity, packages
+
+
+def source_record(repo: Path, destination: Path) -> None:
+    """Keep the working diff and untracked source/config, not datasets or venvs."""
+    diff = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--binary", "HEAD"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    (destination / "working-tree.patch").write_bytes(diff)
+    untracked = subprocess.run(
+        ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard", "-z"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split("\0")
+    names = []
+    for name in filter(None, untracked):
+        relative = Path(name)
+        if relative.parts[0] in {".vscode", "artifacts", "data", "runs", "models"}:
+            continue
+        if relative.suffix not in {".py", ".sh", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini"}:
+            continue
+        source = repo / relative
+        if source.is_file():
+            target = destination / "untracked-source" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+            names.append(name)
+    (destination / "untracked-source.json").write_text(json.dumps(names, indent=2) + "\n")

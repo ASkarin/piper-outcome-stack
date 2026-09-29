@@ -257,3 +257,13 @@ np.testing.assert_allclose(np.subtract(centres[1],centres[0]),[40,30],atol=0.5)
         capture_output=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_virtual_camera_name_is_configurable():
+    config = load_config()
+    config["camera"]["name"] = "front"
+    sim = Simulation(config)
+    try:
+        assert sim.model.camera("front").name == "front"
+    finally:
+        sim.close()

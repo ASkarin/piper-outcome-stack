@@ -1,4 +1,6 @@
-# Host acceptance procedure
+# Infrastructure acceptance procedure
+
+This is initial infrastructure acceptance, not a daily development gate. Ordinary changes use affected tests and a short smoke check; see ../README.md.
 
 Keep raw output under the administrator's persistent run or admin directory. Existing
 locked-image verification JSON is historical evidence; it is not a gate for the
@@ -62,7 +64,7 @@ is not useful to the project. The install, uninstall, and snapshots must appear 
 
 ## 4. GPU, shared memory, and run records
 
-From the clean canonical checkout, the administrator runs:
+For explicitly requested full GPU acceptance, the administrator runs from the development checkout:
 
 ```bash
 infra/container/acceptance/run_gpu_acceptance.sh
@@ -74,14 +76,13 @@ The script reserves all three GPU UUIDs through `piper-gpu-run`, then records:
 - 100 all-reduce iterations on the preferred first two GPUs;
 - 100 all-reduce iterations across all three GPUs;
 - a three-rank, two-workers-per-rank DataLoader run lasting 600 seconds;
-- `environment.json`, `summary.json`, metrics placeholders, and
+- `environment.json`, `summary.json`, output logs, and
   `python-packages.txt`;
 - a real TensorBoard event file and a real W&B offline run file.
 
-`environment.json` must record the shared Python executable and the SHA-256 of the
-complete package list. Retain raw output even if a check fails.
+`environment.json` must record the selected execution Python and the complete package list. Retain raw output even if a check fails. No package-list hash is required.
 
-## 5. Artifact and offline loading
+## 5. Optional published-artifact and offline-loading acceptance
 
 Fetch a deliberately small model or dataset at an exact repository commit:
 
@@ -96,7 +97,7 @@ the same destination is rejected. Load the promoted local path with
 
 ## 6. Restart persistence
 
-Record SSH host-key fingerprints and hashes of small files in each persistent area.
+Record SSH host-key identity and directly compare the relevant small files in each persistent area.
 Run `./piper-compose restart`, reconnect both users, and verify that host keys, authorized
 keys, personal clones, the shared Python environment and its history, promoted
 artifacts, and run records remain unchanged.

@@ -89,7 +89,7 @@ def test_ssh_shells_load_the_mutable_shared_environment() -> None:
     assert "| chpasswd" in entrypoint
     assert '"u:${PIPER_ADMIN_USER}:rwx,u:${PIPER_COLLAB_USER}:r-x,m::rwx"' in entrypoint
     assert "source /workspace/piper/profile.sh" in entrypoint
-    assert 'export PATH="/workspace/piper/bin:${PIPER_SHARED_PYTHON_ENV}/bin:${PATH}"' in profile
+    assert "${VIRTUAL_ENV:+${VIRTUAL_ENV}/bin:}" in profile
     assert "unset PYTHONNOUSERSITE" in profile
     assert 'SHARED_ENV="${PIPER_ROOT}/python-env"' in initializer
     assert 'rsync -a "${SEED_ENV}/" "${temporary}/"' in initializer
@@ -146,10 +146,10 @@ def test_python_admin_command_and_gpu_runs_record_live_packages() -> None:
     assert "only the project administrator" in python_admin
     assert '"install", "uninstall", "list", "snapshot"' in python_admin
     assert '"resolved_packages"' in python_admin
-    assert '"after_freeze_sha256"' in python_admin
-    assert '"python-packages.txt"' in gpu_run
-    assert '"packages_sha256"' in gpu_run
-    assert '"executable": os.path.abspath(sys.executable)' in gpu_run
+    assert '"after_freeze_sha256"' not in python_admin
+    assert "python-packages.txt" in gpu_run
+    assert "packages_sha256" not in gpu_run
+    assert "python_environment(python)" in gpu_run
 
 
 def test_pr_container_build_has_no_registry_write_credentials() -> None:
@@ -177,7 +177,7 @@ def test_image_publication_requires_local_controller_integration() -> None:
         encoding="utf-8"
     )
     publish_job = workflow.split("\n  publish:", maxsplit=1)[1]
-    assert "needs: [validate, local-controller-integration, container]" in publish_job
+    assert "needs: [validate, simulation, local-controller-integration, container]" in publish_job
 
 
 def test_retired_name_scan_checks_paths_and_contents() -> None:

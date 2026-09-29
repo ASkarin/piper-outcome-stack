@@ -1,8 +1,22 @@
-"""Metadata-preserving capture, with lazy loading of the official RealSense driver."""
+"""Configured camera streams and metadata, without importing a hardware driver."""
 
 from dataclasses import dataclass
 import math
 import time
+from .errors import OutcomePiperCameraError
+
+
+def observation_camera_features(configs):
+    features = {}
+    reserved = {*(f"joint_{i}.pos" for i in range(1, 7)), "gripper.pos"}
+    for name, cfg in configs.items():
+        for key, channels, enabled in ((name, 3, cfg.use_rgb), (f"{name}.depth", 1, cfg.use_depth)):
+            if not enabled:
+                continue
+            if key in features or key in reserved:
+                raise ValueError(f"camera stream key collision: {key}")
+            features[key] = (cfg.height, cfg.width, channels)
+    return features
 
 
 def make_timed_cameras(configs):
@@ -20,6 +34,14 @@ class CameraTelemetry:
     timestamp_domain: str
     received_monotonic_s: float
     published_monotonic_s: float
+    stream: str = "color"
+    pixel_format: str = "rgb8"
+    serial_number: str | None = None
+    intrinsics: dict | None = None
+    depth_scale_m: float | None = None
+    depth_to_color: dict | None = None
+    alignment: str = "native"
+    rotation: int | None = None
 
 
 def validate_frame(previous, current):
@@ -49,20 +71,51 @@ def validate_frame(previous, current):
 
 
 def read_new_frame(camera, timeout_s):
-    deadline = time.monotonic() + timeout_s
-    with camera.metadata_condition:
-        while True:
+    started = time.monotonic()
+    deadline = started + timeout_s
+    rejected = None
+    skipped = 0
+    detail = "no new frame"
+    while True:
+        # No camera lock is held while servicing input/robot feedback.
+        service = getattr(camera, "wait_service", None)
+        if service is not None:
+            service()
+        with camera.metadata_condition:
+            now = time.monotonic()
             if camera.capture_error is not None:
-                raise RuntimeError(
-                    f"D435 capture failed: {camera.capture_error}"
+                raise OutcomePiperCameraError(
+                    f"camera capture failed: {camera.capture_error}"
                 ) from camera.capture_error
+            if now >= deadline and timeout_s != 0:
+                raise OutcomePiperCameraError(
+                    f"no fresh camera frame within {timeout_s:.6f}s: {detail}"
+                )
             current = camera.latest_metadata
-            if current is not None and current.frame_number != camera.consumed_frame_number:
-                camera.consumed_frame_number = current.frame_number
-                return camera.latest_color_frame.copy(), current
+            sequence = tuple((key, value.frame_number) for key, value in current.items())
+            max_age = getattr(camera, "max_frame_age_s", None)
+            ages = [now - value.received_monotonic_s for value in current.values()]
+            if any(not math.isfinite(age) or age < 0 for age in ages):
+                raise OutcomePiperCameraError("camera monotonic timestamp is invalid")
+            fresh = max_age is None or all(age <= max_age for age in ages)
+            if sequence and sequence != camera.consumed_frame_number:
+                if fresh:
+                    camera.consumed_frame_number = sequence
+                    camera.last_read_diagnostics = {
+                        "wait_s": now - started,
+                        "stale_frames_skipped": skipped,
+                    }
+                    return {key: value.copy() for key, value in camera.latest_frames.items()}, dict(
+                        current
+                    )
+                detail = f"stale frame sequence={sequence}, ages_s={ages}, limit_s={max_age}"
+                if sequence != rejected:
+                    skipped += 1
+                    rejected = sequence
             if camera.thread is None or not camera.thread.is_alive():
-                raise RuntimeError("D435 capture thread is not running")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("no new D435 frame within feedback timeout")
-            camera.metadata_condition.wait(remaining)
+                raise OutcomePiperCameraError("camera capture thread is not running")
+            if now >= deadline:
+                raise OutcomePiperCameraError(
+                    f"no fresh camera frame within {timeout_s:.6f}s: {detail}"
+                )
+            camera.metadata_condition.wait(min(deadline - now, timeout_s / 4, 0.01))

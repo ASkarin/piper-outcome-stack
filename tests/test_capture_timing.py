@@ -83,7 +83,7 @@ def test_initial_wait_accepts_delayed_frames_without_reissuing_query(tmp_path):
     receiver.wait_ready = ready
     robot._receiver_factory = lambda *args: receiver
     try:
-        robot.connect()
+        connect_for_test(robot)
         assert len(waits) == 2
         assert len([c for c in arm.calls if isinstance(c, tuple) and c[0] == "get_firmware"]) == 1
         assert "enable" not in arm.calls
@@ -97,7 +97,7 @@ def test_initial_timeout_does_not_enable_or_retry(tmp_path):
     receiver.wait_ready = lambda timeout: False
     robot._receiver_factory = lambda *args: receiver
     with pytest.raises(RuntimeError, match="initial complete feedback timed out"):
-        robot.connect()
+        connect_for_test(robot)
     assert arm.calls.count("connect") == arm.calls.count("disconnect") == 1
     assert "enable" not in arm.calls
 
@@ -123,23 +123,23 @@ def test_camera_consumption_never_reuses_a_frame():
     camera = NS(
         metadata_condition=threading.Condition(),
         capture_error=None,
-        latest_metadata=CameraTelemetry(1, 10.0, "hardware_clock", 1.0, 1.0),
+        latest_metadata={"color": CameraTelemetry(1, 10.0, "hardware_clock", 1.0, 1.0)},
         consumed_frame_number=None,
-        latest_color_frame=np.zeros((2, 3, 3), dtype=np.uint8),
+        latest_frames={"color": np.zeros((2, 3, 3), dtype=np.uint8)},
         thread=NS(is_alive=lambda: True),
     )
     image, metadata = read_new_frame(camera, 0)
-    camera.latest_color_frame[:] = 99
-    assert image.max() == 0
-    assert metadata.frame_number == 1
-    with pytest.raises(TimeoutError, match="no new D435"):
+    camera.latest_frames["color"][:] = 99
+    assert image["color"].max() == 0
+    assert metadata["color"].frame_number == 1
+    with pytest.raises(RuntimeError, match="no fresh camera frame"):
         read_new_frame(camera, 0)
 
 
 def test_fresh_feedback_cannot_hide_expired_policy_observation(tmp_path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     try:
-        robot.connect()
+        connect_for_test(robot)
         old = copy.deepcopy(robot.last_observation_telemetry)
         robot._monotonic = lambda: 100.5
         fresh = replace(robot._receiver.snapshot(), received_s=(100.5,) * 5)
@@ -160,19 +160,21 @@ def test_camera_state_quality_gates(tmp_path, camera_t, message):
     robot, arm, _ = make_robot(tmp_path)
     robot.config = replace(robot.config, capture_timing=CaptureTiming(0.2, 0.1, 0.05, 0.2))
     try:
-        robot.connect()
+        connect_for_test(robot)
         robot.cameras = {
             "d435": NS(
                 is_connected=True,
                 disconnect=lambda: None,
                 read_with_metadata=lambda timeout: (
-                    np.zeros((2, 3, 3), dtype=np.uint8),
-                    CameraTelemetry(1, 1.0, "hardware_clock", camera_t, camera_t),
+                    {"color": np.zeros((2, 3, 3), dtype=np.uint8)},
+                    {"color": CameraTelemetry(1, 1.0, "hardware_clock", camera_t, camera_t)},
                 ),
             )
         }
-        with pytest.raises(RuntimeError, match=message):
+        with pytest.raises(RuntimeError, match=message) as error:
             robot.get_observation()
+        if message == "stale":
+            assert "stream=d435, frame=1, age_s=1.000000, limit_s=0.200000" in str(error.value)
     finally:
         robot.disconnect()
 
@@ -183,28 +185,14 @@ def test_motion_camera_requires_explicit_timing(tmp_path):
         replace(robot.config, cameras={"d435": d435_config()})
 
 
-def test_realsense_publication_preserves_frame_and_stops_on_duplicate():
-    from lerobot_robot_outcome_piper.realsense import TimedRealSenseCamera
+def test_realsense_publication_preserves_frame_without_republishing_duplicate():
+    from test_rgbd_capture import fake_camera
 
-    camera = TimedRealSenseCamera.__new__(TimedRealSenseCamera)
-    camera.stop_event = threading.Event()
-    camera.new_frame_event = threading.Event()
-    camera.frame_lock = threading.Lock()
-    camera.metadata_condition = threading.Condition(camera.frame_lock)
-    camera.latest_metadata = None
-    camera.capture_error = None
-    camera._postprocess_image = lambda image: image
-    raw = NS(
-        get_data=lambda: np.full((2, 3, 3), 42, dtype=np.uint8),
-        get_frame_number=lambda: 1,
-        get_timestamp=lambda: 10.0,
-        get_frame_timestamp_domain=lambda: "hardware_clock",
-    )
-    camera._read_from_hardware = lambda: NS(get_color_frame=lambda: raw)
+    camera = fake_camera(use_depth=False)
     camera._read_loop()
-    assert camera.latest_metadata.frame_number == 1
-    assert camera.latest_color_frame.min() == 42
-    assert "duplicate" in str(camera.capture_error)
+    assert camera.latest_metadata["color"].frame_number == 1
+    assert camera.latest_frames["color"].min() == 42
+    assert camera.capture_error is None
 
 
 def test_pinned_sdk_parsers_keep_radians_and_total_gripper_metres():
@@ -297,7 +285,7 @@ def test_sdk_cached_false_does_not_fail_a_successful_enable_request(tmp_path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     arm.enable_result = False
     try:
-        robot.connect()
+        connect_for_test(robot)
         assert robot.state is PiperState.ACTIVE
         assert arm.calls.count("enable") == 1
         assert "electronic_emergency_stop" not in arm.calls
@@ -322,6 +310,9 @@ def test_enable_requires_new_complete_driver_flags_without_resending(tmp_path, k
     calls = [0]
 
     def driver_states():
+        if "enable" not in arm.calls:
+            state = NS(msg=NS(foc_status=NS(driver_enable_status=False, driver_error_status=False)))
+            return ((state, clock[0]),) * 6
         calls[0] += 1
         clock[0] += 0.0625
         if kind == "missing":
@@ -334,17 +325,92 @@ def test_enable_requires_new_complete_driver_flags_without_resending(tmp_path, k
         return ((state, received),) * 6
 
     receiver.driver_states = driver_states
+    receiver.status = lambda: (arm.get_arm_status(), clock[0])
     try:
         if kind == "delayed":
-            robot.connect()
+            connect_for_test(robot)
             assert robot.state is PiperState.ACTIVE
-            assert calls[0] == 2
+            assert calls[0] >= 2
         else:
             with pytest.raises(RuntimeError, match="driver fault|enable confirmation timed out"):
-                robot.connect()
+                connect_for_test(robot)
             assert robot.state is PiperState.FAULT
         assert arm.calls.count("enable") == 1
         assert arm.gripper.commands == []
         assert not any(isinstance(c, tuple) and c[0] == "move_j" for c in arm.calls)
     finally:
         robot.disconnect()
+
+
+from test_plugin import connect_for_test  # noqa: E402
+
+
+def test_temporarily_mixed_groups_wait_for_coherent_actual_values():
+    import threading
+    import time
+
+    arm = FakeArm()
+    comm = NS(get_callback=lambda: lambda p: None, set_callback=lambda cb: None)
+    arm.get_context = lambda: NS(get_comm=lambda: comm)
+    rx = FeedbackReceiver(arm, arm.gripper, time.monotonic)
+    now = time.monotonic()
+    rx.received = dict.fromkeys(rx.IDS, now)
+    rx.received[rx.IDS[0]] = now - 0.011
+    rx.joint_max_skew_s = 0.01
+    rx.snapshot_wait_s = 0.2
+    released = threading.Event()
+
+    def publish():
+        time.sleep(0.01)
+        with rx.condition:
+            arm.joints[0] = 0.25
+            fresh = time.monotonic()
+            for key in rx.IDS[:3]:
+                rx.received[key] = fresh
+            rx.condition.notify_all()
+        released.set()
+
+    worker = threading.Thread(target=publish)
+    worker.start()
+    try:
+        result = rx.snapshot()
+        assert result.joints.msg[0] == 0.25
+        assert max(result.received_s[:3]) - min(result.received_s[:3]) <= 0.01
+        assert result.received_s[0] > now and released.wait(0.1)
+    finally:
+        worker.join()
+
+
+def test_incoherent_feedback_timeout_does_not_change_timestamps():
+    import time
+
+    arm = FakeArm()
+    comm = NS(get_callback=lambda: lambda p: None, set_callback=lambda cb: None)
+    arm.get_context = lambda: NS(get_comm=lambda: comm)
+    rx = FeedbackReceiver(arm, arm.gripper, time.monotonic)
+    now = time.monotonic()
+    rx.received = dict.fromkeys(rx.IDS, now)
+    rx.received[rx.IDS[0]] = now - 0.011
+    original = dict(rx.received)
+    rx.joint_max_skew_s = 0.01
+    rx.snapshot_wait_s = 0.005
+    with pytest.raises(RuntimeError, match="no coherent"):
+        rx.snapshot()
+    assert rx.received == original
+
+
+def test_pending_stop_preempts_wait_for_coherent_feedback():
+    import time
+
+    arm = FakeArm()
+    comm = NS(get_callback=lambda: lambda p: None, set_callback=lambda cb: None)
+    arm.get_context = lambda: NS(get_comm=lambda: comm)
+    rx = FeedbackReceiver(arm, arm.gripper, time.monotonic)
+    now = time.monotonic()
+    rx.received = dict.fromkeys(rx.IDS, now)
+    rx.received[rx.IDS[0]] = now - 0.011
+    rx.joint_max_skew_s = 0.01
+    rx.snapshot_wait_s = 0.1
+    rx.snapshot_wait_service = lambda: (_ for _ in ()).throw(RuntimeError("stop requested"))
+    with pytest.raises(RuntimeError, match="stop requested"):
+        rx.snapshot()

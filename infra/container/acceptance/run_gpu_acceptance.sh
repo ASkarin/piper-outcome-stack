@@ -60,17 +60,17 @@ PY
 done
 
 CUDA_VISIBLE_DEVICES="${gpu_uuids[0]},${gpu_uuids[1]}" \
-    torchrun --standalone --nproc-per-node=2 \
+    python -m torch.distributed.run --standalone --nproc-per-node=2 \
     "${SCRIPT_DIR}/nccl_allreduce.py" --iterations 100 \
     | tee "${OUTPUT_ROOT}/nccl-two-gpu.json"
 
 CUDA_VISIBLE_DEVICES="$(IFS=,; echo "${gpu_uuids[*]}")" \
-    torchrun --standalone --nproc-per-node=3 \
+    python -m torch.distributed.run --standalone --nproc-per-node=3 \
     "${SCRIPT_DIR}/nccl_allreduce.py" --iterations 100 \
     | tee "${OUTPUT_ROOT}/nccl-three-gpu.json"
 
 CUDA_VISIBLE_DEVICES="$(IFS=,; echo "${gpu_uuids[*]}")" \
-    torchrun --standalone --nproc-per-node=3 \
+    python -m torch.distributed.run --standalone --nproc-per-node=3 \
     "${SCRIPT_DIR}/dataloader_smoke.py" \
         --duration-seconds 600 \
         --workers 2 \

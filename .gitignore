@@ -28,4 +28,7 @@ infra/container/environment-verification.json
 # macOS metadata is not release source.
 .DS_Store
 
+# Local ARIS skill traces and metadata.
+.aris/
+
 .venv-sim/

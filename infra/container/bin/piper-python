@@ -11,11 +11,11 @@ import uuid
 from pathlib import Path
 
 for candidate in (
+    Path(__file__).resolve().parents[1] / "lib",
     Path("/workspace/piper/lib"),
     Path("/usr/local/lib/piper-container"),
-    Path(__file__).resolve().parents[1] / "lib",
 ):
-    if candidate.is_dir():
+    if (candidate / "piper_container_common.py").is_file():
         sys.path.insert(0, str(candidate))
         break
 
@@ -25,7 +25,6 @@ from piper_container_common import (  # noqa: E402
     SHARED_PYTHON_ENV,
     PiperContainerError,
     load_runtime_config,
-    sha256_bytes,
     utc_now,
 )
 
@@ -43,7 +42,7 @@ def freeze_packages() -> str:
     return result.stdout.rstrip("\n") + "\n"
 
 
-def write_snapshot(packages: str, *, operation_id: str) -> tuple[Path, str]:
+def write_snapshot(packages: str, *, operation_id: str) -> Path:
     snapshot_root = PYTHON_HISTORY_ROOT / "snapshots"
     snapshot_root.mkdir(mode=0o750, parents=True, exist_ok=True)
     snapshot = snapshot_root / f"{operation_id}.txt"
@@ -52,7 +51,7 @@ def write_snapshot(packages: str, *, operation_id: str) -> tuple[Path, str]:
         stream.flush()
         os.fsync(stream.fileno())
     snapshot.chmod(0o640)
-    return snapshot, sha256_bytes(packages.encode("utf-8"))
+    return snapshot
 
 
 def append_audit(record: dict[str, object]) -> None:
@@ -81,7 +80,9 @@ def ensure_shared_interpreter() -> Path:
     if not executable.is_file():
         raise PiperContainerError(f"shared Python interpreter is unavailable: {executable}")
     if not executable.is_relative_to(root):
-        raise PiperContainerError(f"piper-python must run from {SHARED_PYTHON_ENV}, found {executable}")
+        raise PiperContainerError(
+            f"piper-python must run from {SHARED_PYTHON_ENV}, found {executable}"
+        )
     return executable
 
 
@@ -93,7 +94,6 @@ def run_mutation(action: str, arguments: list[str], user: str) -> int:
     lock_path.parent.mkdir(mode=0o770, parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as lock_stream:
         fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
-        before = freeze_packages()
         command = [sys.executable, "-m", "pip", action]
         if action == "uninstall" and "--yes" not in arguments and "-y" not in arguments:
             command.append("--yes")
@@ -106,7 +106,7 @@ def run_mutation(action: str, arguments: list[str], user: str) -> int:
             timestamp.replace(":", "").replace("-", "").replace(".", "")
             + f"-{uuid.uuid4().hex[:8]}-{action}"
         )
-        snapshot, after_hash = write_snapshot(after, operation_id=operation_id)
+        snapshot = write_snapshot(after, operation_id=operation_id)
         append_audit(
             {
                 "schema_version": 1,
@@ -119,8 +119,6 @@ def run_mutation(action: str, arguments: list[str], user: str) -> int:
                 "status": "succeeded" if completed.returncode == 0 else "failed",
                 "python_executable": os.path.abspath(sys.executable),
                 "python_version": sys.version.split()[0],
-                "before_freeze_sha256": sha256_bytes(before.encode("utf-8")),
-                "after_freeze_sha256": after_hash,
                 "resolved_packages": [line for line in after.splitlines() if line.strip()],
                 "snapshot": str(snapshot),
             }
@@ -164,7 +162,7 @@ def main() -> int:
                 timestamp.replace(":", "").replace("-", "").replace(".", "")
                 + f"-{uuid.uuid4().hex[:8]}-snapshot"
             )
-            snapshot, packages_hash = write_snapshot(packages, operation_id=operation_id)
+            snapshot = write_snapshot(packages, operation_id=operation_id)
             append_audit(
                 {
                     "schema_version": 1,
@@ -176,7 +174,6 @@ def main() -> int:
                     "exit_code": 0,
                     "python_executable": os.path.abspath(sys.executable),
                     "python_version": sys.version.split()[0],
-                    "after_freeze_sha256": packages_hash,
                     "resolved_packages": [line for line in packages.splitlines() if line.strip()],
                     "snapshot": str(snapshot),
                 }

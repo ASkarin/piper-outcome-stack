@@ -204,6 +204,26 @@ class JointRun:
             self.sleep(0.01)
         raise RuntimeError("feedback confirmation timed out; no resend or next waypoint")
 
+    def configure_joint_motion(self, check_stop=lambda: None):
+        # The pinned SDK sends move_mode=0xFF when setting speed. Confirm J only
+        # after that configuration frame; normal reads remain strict afterwards.
+        self.mode_required = False
+        self.send("speed_percent", self.arm.set_speed_percent, self.speed)
+        requested = self.clock()
+        self.send("CAN_J_mode", self.arm.set_motion_mode, self.arm.OPTIONS.MOTION_MODE.J)
+
+        def ready(q, flags, frame, stamps):
+            check_stop()
+            return (
+                frame.received_s[3] >= requested
+                and frame.status.msg.ctrl_mode == 1
+                and frame.status.msg.mode_feedback == 1
+            )
+
+        result = self.wait(ready, 3.0)
+        self.mode_required = True
+        return result
+
     def wait_stable(self, requested, segment_start, goal=None):
         """Allow settling within the original deadline, without resending the target."""
         goal = self.goal if goal is None else goal
@@ -343,18 +363,7 @@ class JointRun:
             self.active = True
             if any(abs(a - b) > TOLERANCE for a, b in zip(start, q)):
                 raise RuntimeError("pose changed during enabling; no position target sent")
-        self.send("speed_percent", self.arm.set_speed_percent, self.speed)
-        requested = self.clock()
-        self.send("CAN_J_mode", self.arm.set_motion_mode, self.arm.OPTIONS.MOTION_MODE.J)
-        self.wait(
-            lambda q, flags, f, stamps: (
-                f.received_s[3] >= requested
-                and f.status.msg.ctrl_mode == 1
-                and f.status.msg.mode_feedback == 1
-            ),
-            3.0,
-        )
-        self.mode_required = True
+        self.configure_joint_motion()
         self.report["completed_stages"] = []
         for stage_index, (goal, points) in enumerate(zip(goals, stage_points)):
             self.phase = f"joint_stage_{stage_index + 1}"

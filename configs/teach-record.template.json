@@ -1,0 +1,35 @@
+{
+  "fps": 20,
+  "episode_time_s": 60,
+  "writer_queue_size": 30,
+  "task": "grasp the green block, lift, place and release",
+  "robot": {
+    "can_interface": "can0",
+    "firmware": "v189",
+    "execution_mode": "read_only",
+    "feedback_timeout_s": null,
+    "capture_timing": {
+      "camera_max_age_s": null,
+      "joint_max_skew_s": null,
+      "image_state_max_skew_s": null,
+      "observation_max_age_s": null
+    },
+    "scene": {
+      "scene_id": "",
+      "base_installation": "",
+      "camera_view": "",
+      "work_area_notes": ""
+    },
+    "cameras": {
+      "d435": {
+        "type": "intelrealsense",
+        "serial_number_or_name": "",
+        "width": 1280,
+        "height": 720,
+        "fps": 30,
+        "use_rgb": true,
+        "use_depth": false
+      }
+    }
+  }
+}
