@@ -385,7 +385,7 @@ def test_real_pause_pose_correction_uses_bounded_waypoints(step_deg, first_segme
     ],
 )
 def test_workspace_reentry_is_inward_on_every_violated_axis(current, target, allowed):
-    from lerobot_robot_outcome_piper.safety import workspace_step_allowed
+    from lerobot_robot_outcome_piper.workspace import workspace_step_allowed
 
     assert (
         workspace_step_allowed(current, target, (0, 0, 0), (1, 1, 1), allow_reentry=True) is allowed

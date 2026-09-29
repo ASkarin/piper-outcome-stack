@@ -220,33 +220,6 @@ def load_motion_safety(safety_path: Path) -> MotionSafety:
     )
 
 
-def workspace_step_allowed(current, target, lower, upper, *, allow_reentry=False):
-    """Keep goals inside the box, or permit strictly inward supervised reentry.
-
-    Reentry never increases violation on any axis or crosses the opposite face.
-    A stationary out-of-box pose is handled as a no-dispatch waiting tick.
-    """
-    if not all(math.isfinite(v) for v in (*current, *target)):
-        return False
-    if all(lo <= v <= hi for v, lo, hi in zip(target, lower, upper, strict=True)):
-        return True
-    if not allow_reentry:
-        return False
-    improved = False
-    for q, v, lo, hi in zip(current, target, lower, upper, strict=True):
-        if q < lo:
-            if not q <= v <= hi:
-                return False
-            improved |= v > q
-        elif q > hi:
-            if not lo <= v <= q:
-                return False
-            improved |= v < q
-        elif not lo <= v <= hi:
-            return False
-    return improved
-
-
 def step_within_limit(target: float, current: float, limit: float) -> bool:
     """Allow arithmetic roundoff only, measured in float ULPs, not physical tolerance."""
     roundoff = 4 * max(math.ulp(target), math.ulp(current), math.ulp(limit))

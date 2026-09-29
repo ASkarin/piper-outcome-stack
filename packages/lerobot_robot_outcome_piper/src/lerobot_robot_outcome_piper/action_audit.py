@@ -4,6 +4,7 @@ import math
 import json
 from pathlib import Path
 import numpy as np
+from .raw_io import read_jsonl
 from .safety import ACTION_KEYS
 
 
@@ -95,9 +96,7 @@ def verify_telemetry(root, dataset):
         completion = json.loads((directory / "complete.json").read_text())
         if completion.get("status") not in ("complete", "empty"):
             raise RuntimeError(f"incomplete telemetry session: {directory.name}")
-        events = [
-            json.loads(line) for line in (directory / "events.jsonl").read_text().splitlines()
-        ]
+        events = read_jsonl(directory / "events.jsonl")
         if any(e["event"] == "failed" for e in events):
             raise RuntimeError(f"failed telemetry session: {directory.name}")
         session = next((e for e in events if e["event"] == "session"), None)

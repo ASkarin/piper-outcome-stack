@@ -60,11 +60,36 @@ def workspace_coordinates(pose, gripper, geometry):
     return (float(points[0, 0]), float(points[0, 1]), *map(float, heights))
 
 
+def workspace_step_allowed(current, target, lower, upper, *, allow_reentry=False):
+    """Keep goals inside the box, or permit strictly inward supervised reentry.
+
+    Reentry never increases violation on any axis or crosses the opposite face.
+    A stationary out-of-box pose is handled as a no-dispatch waiting tick.
+    """
+    if not all(math.isfinite(v) for v in (*current, *target)):
+        return False
+    if all(lo <= v <= hi for v, lo, hi in zip(target, lower, upper, strict=True)):
+        return True
+    if not allow_reentry:
+        return False
+    improved = False
+    for q, v, lo, hi in zip(current, target, lower, upper, strict=True):
+        if q < lo:
+            if not q <= v <= hi:
+                return False
+            improved |= v > q
+        elif q > hi:
+            if not lo <= v <= q:
+                return False
+            improved |= v < q
+        elif not lo <= v <= hi:
+            return False
+    return improved
+
+
 def workspace_pose_allowed(
     current_pose, target_pose, current_gripper, target_gripper, safety, *, allow_reentry=False
 ):
-    from .safety import workspace_step_allowed
-
     current = workspace_coordinates(current_pose, current_gripper, safety.workspace_geometry)
     target = workspace_coordinates(target_pose, target_gripper, safety.workspace_geometry)
     extra = len(current) - 3
@@ -83,8 +108,6 @@ def gripper_table_allowed(pose, current_gripper, target_gripper, safety):
     """Only the two tip heights change when opening at a fixed arm pose."""
     if safety.workspace_geometry is None:
         return True
-    from .safety import workspace_step_allowed
-
     before = workspace_coordinates(pose, current_gripper, safety.workspace_geometry)[3:5]
     after = workspace_coordinates(pose, target_gripper, safety.workspace_geometry)[3:5]
     return workspace_step_allowed(

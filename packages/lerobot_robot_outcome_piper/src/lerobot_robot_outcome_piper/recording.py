@@ -12,6 +12,7 @@ from pathlib import Path
 from contextlib import ExitStack
 import numpy as np
 from .console import operator_message
+from .raw_io import read_jsonl
 from .safety import ACTION_KEYS
 
 
@@ -218,9 +219,7 @@ class TelemetryDataset:
         if self._raw:
             self.dataset.flush_io()
         self.log.flush()
-        events = [
-            json.loads(line) for line in (self.path / "events.jsonl").read_text().splitlines()
-        ]
+        events = read_jsonl(self.path / "events.jsonl")
         timing = summarize_events(events)
         if self.scene is not None and timing["missing_timing_samples"]:
             raise RuntimeError("scene recording has missing timing evidence")

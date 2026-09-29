@@ -36,10 +36,11 @@ def main(argv=None):
     report.add_argument("--events", type=Path, required=True)
     report.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    from lerobot_robot_outcome_piper.raw_io import read_jsonl
     from lerobot_robot_outcome_piper.timing_report import summarize_events
 
     if args.mode == "report":
-        events = [json.loads(line) for line in args.events.read_text().splitlines()]
+        events = read_jsonl(args.events)
         with args.output.open("x") as out:
             json.dump(summarize_events(events), out, indent=2, allow_nan=False)
         return 0

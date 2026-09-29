@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 
 
+def read_jsonl(path):
+    return [json.loads(line) for line in Path(path).read_text().splitlines()]
+
+
 def write_json(path, value):
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")

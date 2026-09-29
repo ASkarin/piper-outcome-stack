@@ -65,6 +65,18 @@ wait distinct from runtime staleness; firmware is queried once. These software p
 still require the five normal-plugin read-only cycles on the candidate release.
 See the [official-source comparison](piper_integration_sources.md).
 
+### Diagnostic acceleration tools
+
+Operator-run diagnostics, not commissioning or startup gates. Both take explicit
+`--interface` and `--firmware` and write a new JSON report (`--output`, never overwritten):
+
+- `infra/acceptance/piper_acceleration_query.py`: one acceleration-limit query per joint;
+  no writes, enable or motion. The fixed `piper-query acceleration` operation is the
+  normal passive entry; use this script only from an explicit `piper-socketcan exec` debug session.
+- `infra/acceptance/piper_j5_acceleration_trial.py apply|restore`: after Enter confirmation,
+  writes only the J5 maximum acceleration (5.0→2.5 or 2.5→5.0 rad/s²) when the read-back
+  current value matches; one write, read-back verified, no retry or automatic restore.
+
 ## Configured RealSense cameras
 
 A single D435 is the current example configuration. Camera names, count, serial or

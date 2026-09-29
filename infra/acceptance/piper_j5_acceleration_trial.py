@@ -42,6 +42,8 @@ def apply(arm, expected, target, report):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("operation", choices=["apply", "restore"])
+    p.add_argument("--interface", required=True)
+    p.add_argument("--firmware", required=True, choices=["default", "v183", "v188", "v189"])
     p.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
     expected, target = (5.0, 2.5) if a.operation == "apply" else (2.5, 5.0)
@@ -55,6 +57,8 @@ def main():
         "status": "started",
         "operation": a.operation,
         "joint": 5,
+        "interface": a.interface,
+        "firmware_driver": a.firmware,
         "expected_rad_s2": expected,
         "requested_rad_s2": target,
         "write_api_called": False,
@@ -62,7 +66,7 @@ def main():
     }
     with a.output.open("x") as f:
         try:
-            apply(create_piper("can0", "v189"), expected, target, report)
+            apply(create_piper(a.interface, a.firmware), expected, target, report)
         finally:
             report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
             json.dump(report, f, indent=2)
