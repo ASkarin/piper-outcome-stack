@@ -1,0 +1,37 @@
+{
+  "schema_version": "outcome-piper-safety-v1",
+  "joint_lower_rad": [
+    -2.6878070480712677,
+    0.0,
+    -3.0543261909900767,
+    -1.7802358370342162,
+    -1.3089969389957472,
+    -2.9670597283903604
+  ],
+  "joint_upper_rad": [
+    2.6878070480712677,
+    3.4033920413889427,
+    0.0,
+    1.7802358370342162,
+    1.3089969389957472,
+    2.9670597283903604
+  ],
+  "max_joint_step_rad": [
+    0.17453292519943295,
+    0.17453292519943295,
+    0.17453292519943295,
+    0.17453292519943295,
+    0.17453292519943295,
+    0.17453292519943295
+  ],
+  "gripper_lower_m": 0.0,
+  "gripper_upper_m": 0.12,
+  "max_gripper_step_m": 0.015,
+  "gripper_force_n": 1.0,
+  "motion_speed_percent": 75,
+  "feedback_timeout_s": 0.2,
+  "watchdog_timeout_s": 0.2,
+  "workspace_lower_m": null,
+  "workspace_upper_m": null,
+  "stop_strategy": "electronic_emergency_stop"
+}

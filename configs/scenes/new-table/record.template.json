@@ -1,0 +1,132 @@
+{
+  "robot": {
+    "type": "outcome_piper",
+    "can_interface": "can0",
+    "firmware": "v189",
+    "feedback_timeout_s": 0.2,
+    "execution_mode": "motion",
+    "scene": {
+      "scene_id": null,
+      "base_installation": null,
+      "camera_view": null,
+      "work_area_notes": null,
+      "camera_to_base_calibration": null
+    },
+    "cameras": {
+      "d435": {
+        "type": "intelrealsense",
+        "serial_number_or_name": "Intel RealSense D435",
+        "width": 640,
+        "height": 480,
+        "fps": 60,
+        "use_rgb": true,
+        "use_depth": true,
+        "warmup_s": 3
+      }
+    },
+    "capture_timing": {
+      "camera_max_age_s": null,
+      "joint_max_skew_s": null,
+      "image_state_max_skew_s": null,
+      "observation_max_age_s": null
+    },
+    "safety_path": null
+  },
+  "teleop": {
+    "type": "outcome_piper_xbox",
+    "device_guid": "0300509d5e040000120b000017050000",
+    "axis_x": 0,
+    "axis_y": 1,
+    "axis_z": 4,
+    "axis_yaw": 3,
+    "axis_left_trigger": 2,
+    "axis_right_trigger": 5,
+    "hold_button": 4,
+    "mode_switch_button": 5,
+    "emergency_stop_button": 1,
+    "home_button": 3,
+    "work_pose_button": null,
+    "work_joint_rad": [
+      0.0,
+      0.6981317007977318,
+      -0.4363323129985824,
+      0.7853981633974483,
+      0.5235987755982988,
+      -0.5235987755982988
+    ],
+    "work_gripper_m": 0.0,
+    "hold_joint_tolerance_rad": 0.0017453292519943296,
+    "hold_stable_time_s": 0.3,
+    "hold_timeout_s": 10.0,
+    "deadzone": 0.08,
+    "control_hz": 50,
+    "xyz_step_m": 0.0025,
+    "rotation_step_rad": 0.008726646259971648,
+    "gripper_step_m": 0.0032,
+    "axis_signs": [
+      1,
+      -1,
+      -1,
+      1
+    ],
+    "trigger_rest_values": [
+      -1.0,
+      -1.0
+    ],
+    "trigger_pressed_values": [
+      0.999969482421875,
+      0.999969482421875
+    ],
+    "ik_max_nfev": 100,
+    "ik_timeout_s": 0.015,
+    "ik_residual_tolerance": 1e-05,
+    "ik_min_singular_value": 0.005,
+    "translation_switch_button": null,
+    "streaming_reference": {
+      "period_s": 0.02,
+      "ramp_time_s": 0.5,
+      "lead_cycles": 2.4
+    },
+    "gripper_reference": {
+      "period_s": 0.02,
+      "max_speed_m_s": 0.12,
+      "acceleration_m_s2": 1.2,
+      "max_lead_m": 0.008
+    },
+    "pose_timing": {
+      "joint_velocity_rad_s": [
+        0.23583865862037065,
+        0.23583865862037065,
+        0.23583865862037065,
+        0.23583865862037065,
+        0.23583865862037065,
+        0.23583865862037065
+      ],
+      "joint_acceleration_rad_s2": [
+        0.10411892600666564,
+        0.10411892600666564,
+        0.10411892600666564,
+        0.10411892600666564,
+        0.10411892600666564,
+        0.10411892600666564
+      ],
+      "gripper_velocity_m_s": 0.06,
+      "gripper_acceleration_m_s2": 1.2,
+      "period_s": 0.02
+    }
+  },
+  "dataset": {
+    "repo_id": "local/piper-new-table-trial",
+    "root": null,
+    "single_task": "Pick up the green block and place it on the white disk.",
+    "fps": 50,
+    "num_episodes": 20,
+    "episode_time_s": 60,
+    "reset_time_s": 0,
+    "push_to_hub": false,
+    "video": true
+  },
+  "display_data": false,
+  "play_sounds": false,
+  "raw_root": "REPLACE_WITH_NEW_RAW_CAPTURE_DIRECTORY"
+}

@@ -1,0 +1,12 @@
+{
+  "d435": {
+    "type": "intelrealsense",
+    "serial_number_or_name": "Intel RealSense D435",
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "use_rgb": true,
+    "use_depth": true,
+    "color_mode": "rgb"
+  }
+}

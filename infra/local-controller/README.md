@@ -28,7 +28,7 @@ sudo --preserve-env=SSH_CONNECTION \
 sudo bash infra/local-controller/bootstrap-host.sh check
 ```
 
-After review, deploy a clean committed checkout as an immutable release:
+Optional historical deployment maintenance only; this is not a collection, acceptance or training prerequisite:
 
 ```bash
 sudo --preserve-env=PIPER_PYPI_MIRROR \
@@ -40,12 +40,22 @@ the public HTTPS, commit-pinned LeRobot and pyAgxArm dependencies from `uv.lock`
 not require a deploy key, SSH wrapper, private adapter repository, or source copy outside
 the immutable release. The administrator may also run hardware debugging from a personal
 clone with `uv sync --frozen --extra local-controller --group dev` and its private editable
-environment. Source-only edits require a process restart, not a release. Formal acceptance,
-formal collection and reproducible experiments use the immutable release. Keep development
+environment. Source-only edits require a process restart, not a release. A separate release build/install/activation is not required for collection, acceptance or training. Authorized data collection may
+use the validated editable checkout with actual source, environment, configuration and
+per-episode evidence (operator approval, 2026-09-17); release publication is not a
+collection prerequisite. Formal training follows its fixed-commit/environment/data policy. Keep development
 baseline/diff, untracked source used, interpreter, command and config with debug outputs;
-the same device and motion gates apply. Run Python as the
+the same device permissions and runtime checks apply. Run Python as the
 administrator, not root; use sudo only for drivers, udev/ACL, SocketCAN, and deployment
 administration.
+
+For daily debugging, select validation by the changed behavior: inspect measurement
+results, run syntax/affected tests for local edits, and perform the corresponding
+authorized hardware check for control changes. Full CI belongs to stage merges,
+formal releases or substantial cross-module changes. Source synchronization of an
+already validated version only needs version/import checks and necessary short smoke
+checks; it does not require simulation regression or a container rebuild. PR updates
+currently trigger full CI automatically, so pushing is not a required debugging step.
 
 The source archive is moved to its final commit-scoped path before `.venv` is created,
 because virtual-environment launchers contain absolute interpreter paths and are not
@@ -126,12 +136,12 @@ pass, every reboot/re-enumeration resets the permission result to `not_checked`,
 administrator must manually isolate and rerun the positive/negative doctor before CAN
 use. Device groups or exact udev ACLs remain appropriate only for the D435 and
 Xbox nodes. Device access does not authorize motion: the five hardware and action flags
-remain false until the physical safety gates have machine evidence.
+describe only the operations actually performed in that report; they are not startup permits. Existing hardware basics are not re-run before development trial collection.
 
 The namespace has no veth/NAT. Real `record` sessions must pass
 `--dataset.push_to_hub=false`; upload the finalized dataset afterwards from the host
 namespace.
 
-The single D435 is bound by inspected serial using `PIPER_D435_SERIAL` for doctor.
+Doctor enumerates visible camera video nodes and matching USB nodes; it does not bind a kit serial.
 Verify both its video nodes and USB device node; enumeration is not an actual
 RealSense-open or role-permission acceptance. See `docs/operations/piper_bringup.md`.

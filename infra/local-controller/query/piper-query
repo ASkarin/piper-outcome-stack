@@ -1,0 +1,5 @@
+#!/bin/sh
+# No caller environment, editable interpreter, module search path or arbitrary command.
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+  SUDO_UID="${SUDO_UID:-}" SUDO_USER="${SUDO_USER:-}" \
+  /usr/bin/python3 -I -S /usr/local/libexec/piper-query.py "$@"

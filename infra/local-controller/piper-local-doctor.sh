@@ -98,7 +98,7 @@ else
 fi
 
 can_not_checked='{"status":"not_checked","interface":"","expected_access":null,"bind_succeeded":null,"error":null,"effective_uid":null,"effective_capabilities_zero":null}'
-not_checked_access='{"can":{"status":"not_checked","interface":"","expected_access":null,"bind_succeeded":null,"error":null,"effective_uid":null,"effective_capabilities_zero":null},"d435":{"status":"not_checked","devices":[]},"xbox":{"status":"not_checked","devices":[]}}'
+not_checked_access='{"can":{"status":"not_checked","interface":"","expected_access":null,"bind_succeeded":null,"error":null,"effective_uid":null,"effective_capabilities_zero":null},"cameras":{"status":"not_checked","devices":[]},"xbox":{"status":"not_checked","devices":[]}}'
 
 probe_access_as() {
     local account=$1
@@ -114,8 +114,7 @@ probe_access_as() {
         printf '%s\n' "${not_checked_access}"
         return
     }
-    sudo -u "${account}" env PIPER_D435_SERIAL="${PIPER_D435_SERIAL:-}" \
-        "${deployment_python}" - <<'PIPER_DEVICE_ACCESS_PROBE'
+    sudo -u "${account}" "${deployment_python}" - <<'PIPER_DEVICE_ACCESS_PROBE'
 import json
 from piper_outcome_stack.ops.robot_doctor import _target_devices
 
