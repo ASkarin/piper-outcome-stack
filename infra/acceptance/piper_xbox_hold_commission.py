@@ -73,7 +73,9 @@ class XboxHoldRun(JointRun):
             raise RuntimeError("pose differs from the previous hold report")
         if reader().emergency:
             raise RuntimeError("B is pressed before commissioning starts")
-        print("仅测试从当前J5约+2.932°返回零位：速度1%，肩键启动，途中松键保持，回中重新按下继续。")
+        print(
+            f"当前J5={math.degrees(initial[4]):.3f}°；受限会话目标为零位，速度1%。请按本轮测试说明操作。"
+        )
         print("保持候选参数沿用联调：0.1° / 稳定0.3秒 / 超时10秒，不写正式验收。")
         print("夹爪闭合0mm/1N。B或控制故障请求电子急停，可能阻尼下降；不自动失能。")
         if confirm(
@@ -89,7 +91,13 @@ class XboxHoldRun(JointRun):
             raise OperatorStop("B pressed at session start")
         self.send("disable_auto_mode", self.arm.set_auto_set_motion_mode_enabled, False)
         self.send("disable_sdk_clipping", self.arm.set_joint_limits_enabled, False)
-        self.send("speed_percent", self.arm.set_speed_percent, 1)
+
+        def check_stop():
+            if reader().emergency:
+                self.control.stop(True)
+                raise OperatorStop("B pressed during motion-mode confirmation")
+
+        self.configure_joint_motion(check_stop)
         self.position_gripper(0.0, initial)
         self.window = None
         if reader().emergency:
@@ -133,7 +141,10 @@ class XboxHoldRun(JointRun):
                     if not pause_seen:
                         finishing = "pause_not_demonstrated"
             if self.control.state is not TeleopState.RUNNING:
+                was_confirmed = self.control.hold_confirmed
                 confirmed = self.confirm_hold(q, frame)
+                if confirmed and not was_confirmed and self.control.state is TeleopState.WAITING:
+                    print("初始保持已确认，可以进行本轮输入操作。", flush=True)
                 if confirmed and finishing:
                     self.report.update(
                         status=finishing,
@@ -202,6 +213,8 @@ class XboxHoldRun(JointRun):
                 self.report["stop_result"] = "sent_not_physically_confirmed"
             except Exception as stop_error:
                 self.report.update(stop_result="unknown", stop_error=str(stop_error))
+        control = getattr(self, "control", None)
+        self.report["terminal_input_state"] = None if control is None else control.state.value
 
 
 def xbox_reader(mapping):
@@ -287,10 +300,10 @@ def main():
     mapping = json.loads(args.mapping.read_text())
     if (
         ref["status"] != "read_complete"
-        or start["status"] != "hold_measurement_complete"
+        or start["status"] not in ("hold_measurement_complete", "target_feedback_confirmed_enabled")
         or mapping["status"] != "physical_mapping_confirmed"
     ):
-        parser.error("completed reference, initial hold and input reports required")
+        parser.error("completed reference, start-pose and input reports required")
     report = dict(
         status="started",
         scope="bounded Xbox return-zero release/resume commissioning; not full Robot/IK/watchdog acceptance",

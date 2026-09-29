@@ -58,22 +58,32 @@ def d435_config(**kwargs):
 @pytest.mark.parametrize(
     "cameras, message",
     [
-        ({"front": d435_config()}, "single 'd435'"),
-        ({"d435": d435_config(), "side": d435_config()}, "single 'd435'"),
         (
-            {"d435": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=30)},
-            "intelrealsense",
+            {"front": OpenCVCameraConfig(index_or_path=0, width=640, height=480, fps=30)},
+            "RealSense backend",
         ),
-        ({"d435": d435_config(serial_number_or_name="Intel RealSense D435")}, "serial number"),
-        ({"d435": d435_config(width=None, height=None, fps=None)}, "Specifying 'width'"),
-        ({"d435": d435_config(use_depth=True)}, "RGB only"),
-        ({"d435": d435_config(use_rgb=False, use_depth=True)}, "RGB only"),
-        ({"d435": d435_config(color_mode="bgr")}, "RGB only"),
+        ({"front": d435_config(serial_number_or_name="")}, "select a RealSense"),
+        ({"front": d435_config(width=None, height=None, fps=None)}, "Specifying"),
+        ({"front": d435_config(use_depth=True), "front.depth": d435_config()}, "collision"),
     ],
 )
-def test_camera_contract_rejects_unsupported_observations(tmp_path, cameras, message):
+def test_camera_contract_rejects_invalid_payload_configuration(tmp_path, cameras, message):
     with pytest.raises(ValueError, match=message):
         replace(config(tmp_path), cameras=cameras)
+
+
+@pytest.mark.parametrize(
+    "cameras",
+    [
+        {"front": d435_config(serial_number_or_name="Intel RealSense D435", use_depth=True)},
+        {"left": d435_config(), "right": d435_config(serial_number_or_name="another-camera")},
+        {"range": d435_config(use_rgb=False, use_depth=True)},
+        {"front": d435_config(color_mode="bgr", use_depth=True)},
+    ],
+)
+def test_camera_names_count_and_depth_are_configuration_choices(tmp_path, cameras):
+    cfg = replace(config(tmp_path), cameras=cameras)
+    assert cfg.cameras == cameras
 
 
 def test_single_d435_observation_preserves_seven_action_fields(tmp_path):
@@ -85,8 +95,8 @@ def test_single_d435_observation_preserves_seven_action_fields(tmp_path):
         connect=lambda: None,
         disconnect=lambda: None,
         read_with_metadata=lambda timeout: (
-            frame,
-            CameraTelemetry(1, 1.0, "hardware_clock", 100.0, 100.0),
+            {"color": frame},
+            {"color": CameraTelemetry(1, 1.0, "hardware_clock", 100.0, 100.0)},
         ),
     )
     robot = OutcomePiper(
@@ -98,7 +108,7 @@ def test_single_d435_observation_preserves_seven_action_fields(tmp_path):
         receiver_factory=FakeReceiver,
     )
     try:
-        robot.connect()
+        connect_for_test(robot)
         observation = robot.get_observation()
         assert set(observation) == {*ACTION_KEYS, "d435"}
         assert observation["d435"] is frame
@@ -168,6 +178,7 @@ class FakeGripper:
     def __init__(self, arm):
         self.arm = arm
         self.width = 0.03
+        self.enabled = False
         self.status_code = 0
         self.timestamp = NOW - 0.02
         self.hz = 50.0
@@ -177,10 +188,19 @@ class FakeGripper:
         if self.arm.fail_feedback:
             raise OSError("feedback failed")
         return SimpleNamespace(
-            msg=SimpleNamespace(value=self.width, mode="width", status_code=self.status_code),
+            msg=SimpleNamespace(
+                value=self.width,
+                mode="width",
+                status_code=self.status_code,
+                foc_status=SimpleNamespace(driver_enable_status=self.enabled),
+            ),
             timestamp=self.timestamp,
             hz=self.hz,
         )
+
+    def disable_gripper(self):
+        self.commands.append("disable")
+        self.enabled = False
 
     def move_gripper_m(self, width, *, force):
         self.commands.append((width, force))
@@ -207,6 +227,7 @@ class FakeArm:
         self.joints = [0.0] * 6
         self.status = 0
         self.error_code = 0
+        self.teach_status = 0
         self.ctrl_mode = 1
         self.mode_feedback = 1
         self.firmware = {
@@ -277,6 +298,10 @@ class FakeArm:
         self.enabled = True
         return self.enable_result
 
+    def disable(self):
+        self.calls.append("disable")
+        self.enabled = False
+
     def electronic_emergency_stop(self):
         self.calls.append("electronic_emergency_stop")
         self.stop_started.set()
@@ -297,6 +322,7 @@ class FakeArm:
         return SimpleNamespace(
             msg=SimpleNamespace(
                 ctrl_mode=self.ctrl_mode,
+                teach_status=self.teach_status,
                 arm_status=self.status,
                 mode_feedback=self.mode_feedback,
                 err_code=self.error_code,
@@ -349,8 +375,8 @@ def safety() -> MotionSafety:
     )
 
 
-def write_gate(tmp_path: Path, *, nameplate_model="PiPER") -> tuple[Path, Path]:
-    """Create synthetic acceptance for the factory-supplied PiPER kit."""
+def write_safety(tmp_path: Path) -> Path:
+    """Create synthetic runtime limits, without acceptance attestations."""
     safety_path = tmp_path / "safety.json"
     safety_path.write_text(
         json.dumps(
@@ -373,66 +399,13 @@ def write_gate(tmp_path: Path, *, nameplate_model="PiPER") -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
-    import hashlib
-
-    digest = "sha256:" + hashlib.sha256(safety_path.read_bytes()).hexdigest()
-    acceptance_path = tmp_path / "acceptance.json"
-    acceptance_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "outcome-piper-hardware-acceptance-v1",
-                "standard_piper_verified": True,
-                "official_gripper_verified": True,
-                "official_usb_can_verified": True,
-                "physical_emergency_stop_verified": True,
-                "five_read_only_cycles_verified": True,
-                "communication_loss_stop_verified": True,
-                "watchdog_stop_verified": True,
-                "teleoperation_hold": {
-                    "verified": True,
-                    "joint_tolerance_rad": 0.01,
-                    "stable_time_s": 0.01,
-                    "timeout_s": 0.1,
-                },
-                "electronic_emergency_stop_verified": True,
-                "no_drop_stop_verified": True,
-                "stop_strategy_verified": True,
-                "stop_strategy": "electronic_emergency_stop",
-                "acceptance_id": "acceptance-test-001",
-                "validated_at_utc": "2026-08-31T00:00:00Z",
-                "validated_by": "operator-test",
-                "nameplate_model": nameplate_model,
-                "robot_serial_number": "PIPER-TEST-001",
-                "gripper_identifier": "AGX-GRIPPER-TEST-001",
-                "usb_can_identifier": "USB-CAN-TEST-001",
-                "physical_emergency_stop_identifier": "ESTOP-TEST-001",
-                "can_interface": "can-test",
-                "firmware": "v189",
-                "firmware_identity": {
-                    "hardware_version": "H-V1.2-1",
-                    "motor_ratio_and_batch": "10",
-                    "node_type": "ARM_MC",
-                    "software_version": "S-V1.8-9",
-                    "production_date": "260813",
-                    "node_number": "15",
-                },
-                "safety_sha256": digest,
-            }
-        ),
-        encoding="utf-8",
-    )
-    return safety_path, acceptance_path
+    return safety_path
 
 
-def config(tmp_path: Path, *, mode="read_only", accepted=True):
+def config(tmp_path: Path, *, mode="read_only"):
     kwargs = {}
     if mode == "motion":
-        safety_path, acceptance_path = write_gate(tmp_path)
-        if not accepted:
-            document = json.loads(acceptance_path.read_text(encoding="utf-8"))
-            document["physical_emergency_stop_verified"] = False
-            acceptance_path.write_text(json.dumps(document), encoding="utf-8")
-        kwargs = {"safety_path": safety_path, "hardware_acceptance_path": acceptance_path}
+        kwargs = {"safety_path": write_safety(tmp_path)}
     return OutcomePiperConfig(
         can_interface="can-test",
         firmware="v189",
@@ -443,7 +416,7 @@ def config(tmp_path: Path, *, mode="read_only", accepted=True):
     )
 
 
-def make_robot(tmp_path: Path, *, mode="read_only", accepted=True):
+def make_robot(tmp_path: Path, *, mode="read_only"):
     arm = FakeArm()
     factory_calls = []
 
@@ -452,7 +425,7 @@ def make_robot(tmp_path: Path, *, mode="read_only", accepted=True):
         return arm
 
     robot = OutcomePiper(
-        config(tmp_path, mode=mode, accepted=accepted),
+        config(tmp_path, mode=mode),
         piper_factory=factory,
         camera_factory=lambda _: {},
         monotonic=lambda: 100.0,
@@ -484,8 +457,8 @@ def test_plugin_distribution_discovery_and_lerobot_factories(tmp_path: Path):
 
 def test_read_only_connect_has_zero_motion_configuration_and_enable(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path)
-    robot.connect()
-    assert robot.state is PiperState.CONNECTED_DISABLED
+    connect_for_test(robot)
+    assert robot.state is PiperState.CONNECTED
     assert "enable" not in arm.calls
     assert not any(
         isinstance(call, tuple) and call[0] in {"auto_mode", "sdk_limits", "motion_mode"}
@@ -495,39 +468,20 @@ def test_read_only_connect_has_zero_motion_configuration_and_enable(tmp_path: Pa
         robot.send_action(valid_action())
 
 
-def test_motion_gate_rejects_before_sdk_construction(tmp_path: Path):
-    robot, _, factory_calls = make_robot(tmp_path, mode="motion", accepted=False)
-    with pytest.raises(OutcomePiperValidationError, match="gate is incomplete"):
-        robot.connect()
-    assert factory_calls == []
-
-
-@pytest.mark.parametrize("nameplate_model", ["PiPER-H", "PiPER-L", "PiPER-X"])
-def test_motion_gate_rejects_nonstandard_nameplate_before_sdk_construction(
-    tmp_path: Path, nameplate_model
-):
-    safety_path, acceptance_path = write_gate(tmp_path, nameplate_model=nameplate_model)
-    factory_calls = []
-    robot = OutcomePiper(
-        OutcomePiperConfig(
-            can_interface="can-test",
-            firmware="v189",
-            feedback_timeout_s=0.2,
-            execution_mode="motion",
-            safety_path=safety_path,
-            hardware_acceptance_path=acceptance_path,
-        ),
-        piper_factory=lambda *args: factory_calls.append(args),
-        camera_factory=lambda _: {},
-    )
-    with pytest.raises(OutcomePiperValidationError, match="exactly 'PiPER'"):
-        robot.connect()
-    assert factory_calls == []
+def test_invalid_runtime_limits_reject_before_sdk_construction(tmp_path):
+    robot, _, factory_calls = make_robot(tmp_path, mode="motion")
+    path = robot.config.safety_path
+    values = json.loads(path.read_text())
+    values["max_joint_step_rad"] = [0] * 6
+    path.write_text(json.dumps(values))
+    with pytest.raises(OutcomePiperValidationError, match="joint step limits"):
+        connect_for_test(robot)
+    assert not factory_calls
 
 
 def test_motion_connect_configures_one_mode_and_enables(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     assert robot.state is PiperState.ACTIVE
     assert ("motion_mode", "J") in arm.calls
     assert ("speed_percent", 5) in arm.calls
@@ -538,20 +492,15 @@ def test_motion_connect_configures_one_mode_and_enables(tmp_path: Path):
 def test_motion_firmware_must_match_pinned_kinematics(tmp_path: Path, software_version):
     robot, arm, factory_calls = make_robot(tmp_path, mode="motion")
     robot.config = replace(robot.config, firmware="default")
-    acceptance_path = robot.config.hardware_acceptance_path
-    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
-    acceptance["firmware"] = "default"
-    acceptance["firmware_identity"]["software_version"] = software_version
-    acceptance_path.write_text(json.dumps(acceptance), encoding="utf-8")
     arm.firmware["software_version"] = software_version
     try:
         if software_version == "S-V1.6-2":
-            with pytest.raises(OutcomePiperValidationError, match="pinned PiPER MDH model"):
-                robot.connect()
-            assert factory_calls == []
-            assert arm.calls == []
+            with pytest.raises(OutcomePiperStateError, match="pinned PiPER MDH model"):
+                connect_for_test(robot)
+            assert factory_calls
+            assert "enable" not in arm.calls
         else:
-            robot.connect()
+            connect_for_test(robot)
             assert robot.state is PiperState.ACTIVE
             assert "enable" in arm.calls
     finally:
@@ -563,7 +512,7 @@ def test_read_only_can_inspect_firmware_before_kinematics_change(tmp_path: Path)
     robot.config = replace(robot.config, firmware="default")
     arm.firmware["software_version"] = "S-V1.6-2"
     try:
-        robot.connect()
+        connect_for_test(robot)
         assert robot.get_observation() == valid_action()
         assert "enable" not in arm.calls
         assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
@@ -574,18 +523,16 @@ def test_read_only_can_inspect_firmware_before_kinematics_change(tmp_path: Path)
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("hardware_version", "H-V9.9-9", "hardware_version"),
-        ("node_type", "PIPER_X", "node_type"),
+        ("hardware_version", None, "hardware_version"),
+        ("node_type", "PIPER_X", "PiPER arm controller"),
         ("software_version", "S-V1.8-8", "software_version"),
     ],
 )
-def test_motion_gate_binds_live_firmware_identity_before_enable(
-    tmp_path: Path, field, value, message
-):
+def test_live_firmware_validation_still_precedes_enable(tmp_path: Path, field, value, message):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     arm.firmware[field] = value
     with pytest.raises(OutcomePiperStateError, match=message):
-        robot.connect()
+        connect_for_test(robot)
     assert "enable" not in arm.calls
 
 
@@ -596,9 +543,10 @@ def test_motion_mode_feedback_must_confirm_can_move_j_before_enable(
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     arm.ctrl_mode = ctrl_mode
     arm.mode_feedback = mode_feedback
+    robot.connect()
     robot._monotonic = itertools.count(100.0, 0.02).__next__
     with pytest.raises(OutcomePiperStateError, match="motion-mode feedback confirmation timed out"):
-        robot.connect()
+        robot.enable()
     assert "enable" not in arm.calls
     assert arm.calls.count(("motion_mode", "J")) == 1
 
@@ -615,15 +563,20 @@ def test_mode_confirmation_waits_for_fresh_matching_status_before_enable(tmp_pat
     pending = [None, old_matching, new_transition, new_matching]
 
     def get_status():
+        if ("motion_mode", "J") not in arm.calls:
+            return original_get_status()
         if pending:
             assert "enable" not in arm.calls
-            return pending.pop(0)
+            result = pending.pop(0)
+            if result is new_matching or result is new_transition:
+                result.timestamp = NOW + (robot._monotonic() - 100.0)
+            return result
         return original_get_status()
 
     arm.get_arm_status = get_status
-    robot._monotonic = itertools.count(100.0, 0.005).__next__
+    robot._monotonic = itertools.count(100.0, 0.001).__next__
     try:
-        robot.connect()
+        connect_for_test(robot)
         assert not pending
         assert robot.state is PiperState.ACTIVE
         assert arm.calls.count(("motion_mode", "J")) == 1
@@ -636,10 +589,11 @@ def test_mode_confirmation_waits_for_fresh_matching_status_before_enable(tmp_pat
 def test_stale_or_missing_mode_confirmation_never_enables(tmp_path: Path, missing):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     old = arm.get_arm_status()
-    arm.get_arm_status = lambda: None if missing else old
+    arm.get_arm_status = lambda: None if missing and ("motion_mode", "J") in arm.calls else old
+    robot.connect()
     robot._monotonic = itertools.count(100.0, 0.02).__next__
     with pytest.raises(OutcomePiperStateError, match="confirmation timed out"):
-        robot.connect()
+        robot.enable()
     assert robot.state is PiperState.FAULT
     assert arm.calls.count(("motion_mode", "J")) == 1
     assert "enable" not in arm.calls
@@ -654,7 +608,7 @@ def test_invalid_mode_timestamp_fails_before_enable(tmp_path: Path, timestamp):
     status.timestamp = timestamp
     arm.get_arm_status = lambda: status
     with pytest.raises(OutcomePiperStateError, match="timestamp"):
-        robot.connect()
+        connect_for_test(robot)
     assert "enable" not in arm.calls
 
 
@@ -665,12 +619,14 @@ def test_mode_confirmation_does_not_accept_a_result_after_its_deadline(tmp_path:
     original_get_status = arm.get_arm_status
 
     def late_status():
-        clock[0] += 0.3
+        if ("motion_mode", "J") in arm.calls:
+            clock[0] += 0.3
         return original_get_status()
 
+    robot.connect()
     arm.get_arm_status = late_status
     with pytest.raises(OutcomePiperStateError, match="confirmation timed out"):
-        robot.connect()
+        robot.enable()
     assert "enable" not in arm.calls
 
 
@@ -683,11 +639,11 @@ def test_controller_fault_aborts_mode_confirmation(tmp_path, status, error_code,
     arm.status = status
     arm.error_code = error_code
     with pytest.raises(OutcomePiperStateError, match="controller"):
-        robot.connect()
+        connect_for_test(robot)
     assert robot.state is expected_state
     assert "enable" not in arm.calls
     assert ("speed_percent", 5) not in arm.calls
-    assert arm.calls.count("electronic_emergency_stop") == 1
+    assert arm.calls.count("electronic_emergency_stop") == 0
 
 
 def test_stop_request_interrupts_mode_confirmation(tmp_path: Path):
@@ -700,7 +656,7 @@ def test_stop_request_interrupts_mode_confirmation(tmp_path: Path):
 
     arm.get_arm_status = stop_while_waiting
     with pytest.raises(OutcomePiperStateError, match="operator stop during connection"):
-        robot.connect()
+        connect_for_test(robot)
     assert robot.state is PiperState.E_STOP
     assert "enable" not in arm.calls
 
@@ -709,7 +665,7 @@ def test_wall_clock_rollback_does_not_change_receive_age(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     robot._wall_time = lambda: NOW - 1000.0
     try:
-        robot.connect()
+        connect_for_test(robot)
         robot.send_action(valid_action())
         assert robot.state is PiperState.ACTIVE
     finally:
@@ -720,7 +676,7 @@ def test_wall_clock_rollback_does_not_change_receive_age(tmp_path: Path):
 def test_motion_session_mode_change_stops_before_next_action(tmp_path, ctrl_mode, mode_feedback):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     try:
-        robot.connect()
+        connect_for_test(robot)
         arm.ctrl_mode = ctrl_mode
         arm.mode_feedback = mode_feedback
         with pytest.raises(OutcomePiperStateError, match="left CAN joint position-velocity mode"):
@@ -735,20 +691,15 @@ def test_motion_session_mode_change_stops_before_next_action(tmp_path, ctrl_mode
 
 def test_mode_change_after_confirmation_is_rejected_before_enable(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    original_get_status = arm.get_arm_status
-    reads = 0
+    original_confirm = robot._confirm_motion_mode_locked
 
-    def get_status():
-        nonlocal reads
-        reads += 1
-        status = original_get_status()
-        if reads > 1:
-            status.msg.ctrl_mode = 2
-        return status
+    def confirm(requested):
+        original_confirm(requested)
+        arm.ctrl_mode = 2
 
-    arm.get_arm_status = get_status
+    robot._confirm_motion_mode_locked = confirm
     with pytest.raises(OutcomePiperStateError, match="left CAN joint position-velocity mode"):
-        robot.connect()
+        connect_for_test(robot)
     assert "enable" not in arm.calls
 
 
@@ -757,7 +708,7 @@ def test_read_only_observation_does_not_require_motion_mode(tmp_path: Path):
     arm.ctrl_mode = 2
     arm.mode_feedback = 0
     try:
-        robot.connect()
+        connect_for_test(robot)
         assert robot.get_observation() == valid_action()
         assert "enable" not in arm.calls
         assert "electronic_emergency_stop" not in arm.calls
@@ -765,7 +716,7 @@ def test_read_only_observation_does_not_require_motion_mode(tmp_path: Path):
         robot.disconnect()
 
 
-@pytest.mark.parametrize("failed_call", ["auto_mode", "sdk_limits", "motion_mode"])
+@pytest.mark.parametrize("failed_call", ["auto_mode", "sdk_limits", "speed_percent", "motion_mode"])
 def test_motion_configure_checks_each_sdk_step_immediately(tmp_path: Path, failed_call):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     original_has_comm_error = arm.has_comm_error
@@ -777,16 +728,24 @@ def test_motion_configure_checks_each_sdk_step_immediately(tmp_path: Path, faile
 
     arm.has_comm_error = has_comm_error
     with pytest.raises(OutcomePiperStateError, match="latched FAULT"):
-        robot.connect()
+        connect_for_test(robot)
     configured = [call[0] for call in arm.calls if isinstance(call, tuple)]
     expected = {
         "auto_mode": ["init_effector", "get_firmware", "auto_mode"],
         "sdk_limits": ["init_effector", "get_firmware", "auto_mode", "sdk_limits"],
+        "speed_percent": [
+            "init_effector",
+            "get_firmware",
+            "auto_mode",
+            "sdk_limits",
+            "speed_percent",
+        ],
         "motion_mode": [
             "init_effector",
             "get_firmware",
             "auto_mode",
             "sdk_limits",
+            "speed_percent",
             "motion_mode",
         ],
     }
@@ -807,7 +766,7 @@ def test_motion_configure_checks_each_sdk_step_immediately(tmp_path: Path, faile
 )
 def test_action_schema_and_limits_fail_without_move(tmp_path: Path, action, message):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     with pytest.raises(OutcomePiperValidationError, match=message):
         robot.send_action(action)
     assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
@@ -822,7 +781,7 @@ def test_direct_joint_action_cannot_bypass_frozen_workspace(tmp_path: Path):
     assert target_pose[1] > initial_pose[1]
 
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     assert robot._safety is not None
     robot._safety = replace(
         robot._safety,
@@ -840,7 +799,7 @@ def test_direct_joint_action_cannot_bypass_frozen_workspace(tmp_path: Path):
 
 def test_feedback_uses_three_groups_and_separate_status_gripper_telemetry(tmp_path: Path):
     robot, _, _ = make_robot(tmp_path)
-    robot.connect()
+    connect_for_test(robot)
     telemetry = robot.last_feedback_telemetry
     assert telemetry is not None
     assert telemetry.joint_group_timestamps_s == (NOW - 0.01, NOW - 0.02, NOW - 0.03)
@@ -855,7 +814,7 @@ def test_feedback_uses_three_groups_and_separate_status_gripper_telemetry(tmp_pa
 
 def test_send_action_uses_only_frozen_speed_and_gripper_force(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     result = robot.send_action(valid_action())
     assert result == valid_action()
     assert ("speed_percent", 5) in arm.calls
@@ -867,26 +826,26 @@ def test_stale_or_future_feedback_latches_fault(tmp_path: Path, timestamp):
     robot, arm, _ = make_robot(tmp_path)
     arm._parser.joint_12.timestamp = timestamp
     with pytest.raises(OutcomePiperStateError):
-        robot.connect()
+        connect_for_test(robot)
     assert robot.state is PiperState.FAULT
 
 
 def test_sdk_feedback_failure_latches_and_disconnect_cannot_clear_session(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path)
-    robot.connect()
+    connect_for_test(robot)
     arm.fail_feedback = True
     with pytest.raises(OutcomePiperStateError, match="latched FAULT"):
         robot.get_observation()
     robot.disconnect()
     assert robot.state is PiperState.FAULT
     with pytest.raises(OutcomePiperStateError):
-        robot.connect()
+        connect_for_test(robot)
 
 
 @pytest.mark.parametrize("malformation", ["gripper_status", "frame_frequency"])
 def test_feedback_parse_failure_stops_and_terminally_latches_session(tmp_path: Path, malformation):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     if malformation == "gripper_status":
         arm.gripper.status_code = None
     else:
@@ -899,12 +858,12 @@ def test_feedback_parse_failure_stops_and_terminally_latches_session(tmp_path: P
     assert robot.state is PiperState.FAULT
     robot.disconnect()
     with pytest.raises(OutcomePiperStateError, match="terminally latched FAULT"):
-        robot.connect()
+        connect_for_test(robot)
 
 
 def test_active_arm_disconnect_stops_and_terminally_latches_session(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     arm.connected = False
 
     with pytest.raises(OutcomePiperStateError, match="connection lost: arm"):
@@ -916,12 +875,12 @@ def test_active_arm_disconnect_stops_and_terminally_latches_session(tmp_path: Pa
     robot.disconnect()
     assert not robot.is_connected
     with pytest.raises(OutcomePiperStateError, match="terminally latched FAULT"):
-        robot.connect()
+        connect_for_test(robot)
 
 
 def test_active_camera_disconnect_stops_and_terminally_latches_session(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     robot.cameras["d435"] = FakeCamera(connected=False)
 
     with pytest.raises(OutcomePiperStateError, match="camera 'd435'"):
@@ -933,13 +892,13 @@ def test_active_camera_disconnect_stops_and_terminally_latches_session(tmp_path:
     robot.disconnect()
     assert not robot.is_connected
     with pytest.raises(OutcomePiperStateError, match="terminally latched FAULT"):
-        robot.connect()
+        connect_for_test(robot)
 
 
 @pytest.mark.parametrize("probe_target", ["arm", "camera"])
 def test_active_connection_probe_error_stops_and_latches_session(tmp_path: Path, probe_target):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     if probe_target == "arm":
         arm.is_connected = lambda: (_ for _ in ()).throw(OSError("arm probe failed"))
     else:
@@ -955,7 +914,7 @@ def test_active_connection_probe_error_stops_and_latches_session(tmp_path: Path,
 
 def test_disconnect_never_homes_resets_disables_or_stops(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     robot.disconnect()
     assert not any(
         (isinstance(call, str) and call in {"home", "reset", "disable"})
@@ -966,7 +925,7 @@ def test_disconnect_never_homes_resets_disables_or_stops(tmp_path: Path):
 
 def test_disconnect_is_serialized_after_inflight_action(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     arm.block_move = True
     action_errors = []
     disconnect_errors = []
@@ -995,7 +954,7 @@ def test_disconnect_is_serialized_after_inflight_action(tmp_path: Path):
 
 def test_expired_inflight_action_does_not_send_gripper(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     arm.block_move = True
     action_errors = []
     action_thread = threading.Thread(
@@ -1017,7 +976,7 @@ def test_expired_inflight_action_does_not_send_gripper(tmp_path: Path):
 
 def test_watchdog_stop_failure_is_exposed_to_the_control_loop(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     arm.fail_stop = True
     robot._monotonic = lambda: 111.0
     assert arm.stop_started.wait(timeout=1)
@@ -1032,7 +991,7 @@ def test_watchdog_stop_failure_is_exposed_to_the_control_loop(tmp_path: Path):
 
 def test_disconnect_waits_for_watchdog_stop_before_releasing_sdk(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     arm.block_stop = True
     robot._monotonic = lambda: 111.0
     assert arm.stop_started.wait(timeout=1)
@@ -1052,7 +1011,7 @@ def test_disconnect_waits_for_watchdog_stop_before_releasing_sdk(tmp_path: Path)
 def test_input_stop_during_inflight_move_prevents_gripper_and_latches_e_stop(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     with motion_input_safety_scope():
-        robot.connect()
+        connect_for_test(robot)
         arm.block_move = True
         action_errors = []
         stop_errors = []
@@ -1084,7 +1043,7 @@ def test_input_stop_during_inflight_move_prevents_gripper_and_latches_e_stop(tmp
 def test_input_stop_wins_over_concurrent_move_failure_and_session_cannot_recover(tmp_path: Path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     with motion_input_safety_scope():
-        robot.connect()
+        connect_for_test(robot)
         arm.block_move = True
         arm.fail_command = True
         action_errors = []
@@ -1114,7 +1073,7 @@ def test_input_stop_wins_over_concurrent_move_failure_and_session_cannot_recover
     robot.disconnect()
     assert robot.state is PiperState.E_STOP
     with pytest.raises(OutcomePiperStateError, match="terminally latched E_STOP"):
-        robot.connect()
+        connect_for_test(robot)
 
 
 def _capture_error(target, operation, *args):
@@ -1128,7 +1087,7 @@ class FakeJoystick:
     def __init__(self, guid="measured-guid"):
         self.guid = guid
         self.axes = [0.0, 0.05, -0.5, 0.25, -1.0, 1.0]
-        self.buttons = [0, 1]
+        self.buttons = [0, 1, 0, 0, 0, 0]
         self.initialized = True
 
     def get_init(self):
@@ -1164,13 +1123,16 @@ def xbox_config(**overrides):
         "axis_right_trigger": 5,
         "hold_button": 1,
         "emergency_stop_button": 0,
+        "mode_switch_button": 2,
+        "translation_switch_button": 5,
+        "home_button": 3,
         "hold_joint_tolerance_rad": 0.01,
         "hold_stable_time_s": 0.01,
         "hold_timeout_s": 0.1,
         "deadzone": 0.1,
         "control_hz": 20,
         "xyz_step_m": 0.01,
-        "yaw_step_rad": 0.02,
+        "rotation_step_rad": 0.02,
         "gripper_step_m": 0.004,
         "axis_signs": (1, -1, 1, -1),
         "trigger_rest_values": (-1.0, -1.0),
@@ -1192,14 +1154,19 @@ def test_xbox_mapping_deadzone_triggers_hold_and_disconnect():
     xbox.connect()
     action = xbox.get_action()
     assert action == {
-        "delta_x": 0.0,
-        "delta_y": 0.0,
-        "delta_z": -0.005,
-        "delta_yaw": -0.005,
-        "delta_gripper": 0.004,
+        "stick_x": 0.0,
+        "stick_y": 0.0,
+        "stick_z": -0.5,
+        "stick_yaw": -0.25,
+        "left_trigger": 0.0,
+        "right_trigger": 1.0,
         "hold": True,
         "neutral": False,
         "emergency_stop": False,
+        "mode_switch": False,
+        "translation_switch": False,
+        "home": False,
+        "work": False,
     }
     xbox.disconnect()
     with pytest.raises(OutcomePiperStateError, match="disconnected"):
@@ -1240,7 +1207,7 @@ def test_bound_xbox_disconnect_immediately_stops_and_latches_e_stop(tmp_path: Pa
     xbox = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
     xbox.connect()
     with motion_input_safety_scope():
-        robot.connect()
+        connect_for_test(robot)
         joystick.initialized = False
         with pytest.raises(OutcomePiperStateError, match="disconnected"):
             xbox.get_action()
@@ -1256,7 +1223,7 @@ def test_bound_xbox_axis_error_immediately_stops_and_latches_e_stop(tmp_path: Pa
     xbox.connect()
     joystick.get_axis = lambda _: (_ for _ in ()).throw(OSError("USB read failed"))
     with motion_input_safety_scope():
-        robot.connect()
+        connect_for_test(robot)
         with pytest.raises(OSError, match="USB read failed"):
             xbox.get_action()
     assert "electronic_emergency_stop" in arm.calls
@@ -1279,7 +1246,7 @@ def test_bound_xbox_failure_reports_electronic_stop_failure(
     xbox = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
     xbox.connect()
     with motion_input_safety_scope():
-        robot.connect()
+        connect_for_test(robot)
         if failure == "command":
             arm.fail_stop = True
         else:
@@ -1296,20 +1263,25 @@ def test_bound_xbox_failure_reports_electronic_stop_failure(
     robot.disconnect()
 
 
-def test_xbox_hold_to_run_outputs_zero_motion():
+def test_xbox_released_hold_preserves_raw_input_for_processor():
     joystick = FakeJoystick()
     joystick.buttons[1] = 0
     xbox = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
     xbox.connect()
     assert xbox.get_action() == {
-        "delta_x": 0.0,
-        "delta_y": 0.0,
-        "delta_z": 0.0,
-        "delta_yaw": 0.0,
-        "delta_gripper": 0.0,
+        "stick_x": 0.0,
+        "stick_y": 0.0,
+        "stick_z": -0.5,
+        "stick_yaw": -0.25,
+        "left_trigger": 0.0,
+        "right_trigger": 1.0,
         "hold": False,
         "neutral": False,
         "emergency_stop": False,
+        "mode_switch": False,
+        "translation_switch": False,
+        "home": False,
+        "work": False,
     }
 
 
@@ -1326,7 +1298,7 @@ def test_processor_hold_output_has_only_canonical_seven_fields():
     processor = OutcomePiperXboxProcessor(
         safety=safety(),
         max_xyz_step_m=0.01,
-        max_yaw_step_rad=0.02,
+        max_rotation_step_rad=0.02,
         max_gripper_step_m=0.004,
         ik_max_nfev=10,
         ik_timeout_s=0.1,
@@ -1336,14 +1308,19 @@ def test_processor_hold_output_has_only_canonical_seven_fields():
     processor._current_transition = {TransitionKey.OBSERVATION: valid_action()}
     result = processor.action(
         {
-            "delta_x": 0.0,
-            "delta_y": 0.0,
-            "delta_z": 0.0,
-            "delta_yaw": 0.0,
-            "delta_gripper": 0.0,
+            "stick_x": 0.0,
+            "stick_y": 0.0,
+            "stick_z": 0.0,
+            "stick_yaw": 0.0,
+            "left_trigger": 0.0,
+            "right_trigger": 0.0,
             "hold": False,
             "neutral": False,
             "emergency_stop": False,
+            "mode_switch": False,
+            "translation_switch": False,
+            "home": False,
+            "work": False,
         }
     )
     assert tuple(result) == ACTION_KEYS
@@ -1355,47 +1332,38 @@ def attach_hold(robot, control):
     from lerobot_robot_outcome_piper.teleop_control import HoldSettings
 
     settings = HoldSettings(0.01, 0.01, 0.1)
-    path = robot.config.hardware_acceptance_path
-    record = json.loads(path.read_text())
-    record["teleoperation_hold"] = {"verified": True, **vars(settings)}
-    path.write_text(json.dumps(record))
     robot.configure_teleoperation(control, settings)
 
 
-def test_startup_wait_through_official_teleop_loop_does_not_estop(tmp_path, monkeypatch):
+def test_startup_wait_through_no_dataset_record_loop_does_not_estop(tmp_path, monkeypatch):
     monkeypatch.setattr("lerobot_robot_outcome_piper.processor.time.monotonic", lambda: 100.0)
     from lerobot.processor import make_default_processors
-    from lerobot.scripts import lerobot_teleoperate as official
+    from lerobot.scripts import lerobot_record as official
 
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     processor = workflows._processor(robot.config, xbox_config())
     attach_hold(robot, processor.steps[0].control)
-    robot.connect()
+    connect_for_test(robot)
 
-    class ReleasedTeleop:
-        name = "outcome_piper_xbox"
-
-        def get_action(self):
-            return {
-                **dict.fromkeys(
-                    ("delta_x", "delta_y", "delta_z", "delta_yaw", "delta_gripper"), 0.0
-                ),
-                "hold": False,
-                "neutral": True,
-                "emergency_stop": False,
-            }
+    joystick = FakeJoystick()
+    joystick.axes = [0.0, 0.0, 0.0, 0.0, -1.0, -1.0]
+    joystick.buttons[1] = 0
+    teleop = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
+    teleop.connect()
 
     monkeypatch.setattr(official, "precise_sleep", lambda _: None)
     _, ap, op = make_default_processors()
     try:
-        official.teleop_loop(
-            teleop=ReleasedTeleop(),
+        official.record_loop(
+            teleop=teleop,
+            events={"exit_early": False},
+            dataset=None,
             robot=robot,
             fps=20,
             teleop_action_processor=processor,
             robot_action_processor=ap,
             robot_observation_processor=op,
-            duration=0.001,
+            control_time_s=0.001,
         )
         assert [c for c in arm.calls if isinstance(c, tuple) and c[0] == "move_j"] == [
             ("move_j", [0.0] * 6)
@@ -1403,6 +1371,7 @@ def test_startup_wait_through_official_teleop_loop_does_not_estop(tmp_path, monk
         assert not arm.gripper.commands and "electronic_emergency_stop" not in arm.calls
         assert robot.state is PiperState.ACTIVE
     finally:
+        teleop.disconnect()
         robot.disconnect()
 
 
@@ -1415,7 +1384,7 @@ def test_startup_wait_through_official_record_loop_emits_no_training_frame(tmp_p
     robot, arm, _ = make_robot(tmp_path, mode="motion")
     processor = workflows._processor(robot.config, xbox_config())
     attach_hold(robot, processor.steps[0].control)
-    robot.connect()
+    connect_for_test(robot)
     frames = []
 
     class Dataset:
@@ -1459,14 +1428,14 @@ def test_startup_wait_through_official_record_loop_emits_no_training_frame(tmp_p
     "observation, message",
     [
         ({**valid_action(), "joint_1.pos": 1.1}, "joint limits"),
-        ({**valid_action(), "gripper.pos": 0.09}, "gripper limits"),
+        ({**valid_action(), "gripper.pos": -0.01}, "negative"),
     ],
 )
 def test_processor_rejects_observation_outside_frozen_limits(observation, message):
     processor = OutcomePiperXboxProcessor(
         safety=safety(),
         max_xyz_step_m=0.01,
-        max_yaw_step_rad=0.02,
+        max_rotation_step_rad=0.02,
         max_gripper_step_m=0.004,
         ik_max_nfev=10,
         ik_timeout_s=0.1,
@@ -1477,14 +1446,19 @@ def test_processor_rejects_observation_outside_frozen_limits(observation, messag
     with pytest.raises(OutcomePiperValidationError, match=message):
         processor.action(
             {
-                "delta_x": 0.0,
-                "delta_y": 0.0,
-                "delta_z": 0.0,
-                "delta_yaw": 0.0,
-                "delta_gripper": 0.0,
+                "stick_x": 0.0,
+                "stick_y": 0.0,
+                "stick_z": 0.0,
+                "stick_yaw": 0.0,
+                "left_trigger": 0.0,
+                "right_trigger": 0.0,
                 "hold": False,
                 "neutral": False,
                 "emergency_stop": False,
+                "mode_switch": False,
+                "translation_switch": False,
+                "home": False,
+                "work": False,
             }
         )
 
@@ -1492,11 +1466,11 @@ def test_processor_rejects_observation_outside_frozen_limits(observation, messag
 def test_processor_ik_failure_does_not_call_robot_sdk(tmp_path: Path, monkeypatch):
     pytest.importorskip("pyAgxArm")
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    robot.connect()
+    connect_for_test(robot)
     processor = OutcomePiperXboxProcessor(
         safety=safety(),
         max_xyz_step_m=0.01,
-        max_yaw_step_rad=0.02,
+        max_rotation_step_rad=0.02,
         max_gripper_step_m=0.004,
         ik_max_nfev=10,
         ik_timeout_s=0.1,
@@ -1504,6 +1478,9 @@ def test_processor_ik_failure_does_not_call_robot_sdk(tmp_path: Path, monkeypatc
         ik_min_singular_value=0.001,
     )
     processor._current_transition = {TransitionKey.OBSERVATION: valid_action()}
+    from lerobot_robot_outcome_piper.teleop_control import TranslationStrategy
+
+    processor.control.translation_strategy = TranslationStrategy.FIXED_ORIENTATION
     processor.control.confirm_hold()
     processor.control.observe(False, True)
     processor.control.observe(True, True)
@@ -1515,14 +1492,19 @@ def test_processor_ik_failure_does_not_call_robot_sdk(tmp_path: Path, monkeypatc
     with pytest.raises(OutcomePiperValidationError, match="IK failed"):
         processor.action(
             {
-                "delta_x": 0.001,
-                "delta_y": 0.0,
-                "delta_z": 0.0,
-                "delta_yaw": 0.0,
-                "delta_gripper": 0.0,
+                "stick_x": 0.001,
+                "stick_y": 0.0,
+                "stick_z": 0.0,
+                "stick_yaw": 0.0,
+                "left_trigger": 0.0,
+                "right_trigger": 0.0,
                 "hold": True,
                 "neutral": False,
                 "emergency_stop": False,
+                "mode_switch": False,
+                "translation_switch": False,
+                "home": False,
+                "work": False,
             }
         )
     assert not any(isinstance(call, tuple) and call[0] == "move_j" for call in arm.calls)
@@ -1534,7 +1516,7 @@ def test_bound_processor_ik_failure_stops_without_motion(tmp_path: Path, monkeyp
     processor = OutcomePiperXboxProcessor(
         safety=safety(),
         max_xyz_step_m=0.01,
-        max_yaw_step_rad=0.02,
+        max_rotation_step_rad=0.02,
         max_gripper_step_m=0.004,
         ik_max_nfev=10,
         ik_timeout_s=0.1,
@@ -1542,6 +1524,9 @@ def test_bound_processor_ik_failure_stops_without_motion(tmp_path: Path, monkeyp
         ik_min_singular_value=0.001,
     )
     processor._current_transition = {TransitionKey.OBSERVATION: valid_action()}
+    from lerobot_robot_outcome_piper.teleop_control import TranslationStrategy
+
+    processor.control.translation_strategy = TranslationStrategy.FIXED_ORIENTATION
     processor.control.confirm_hold()
     processor.control.observe(False, True)
     processor.control.observe(True, True)
@@ -1552,18 +1537,23 @@ def test_bound_processor_ik_failure_stops_without_motion(tmp_path: Path, monkeyp
     )
 
     with motion_input_safety_scope():
-        robot.connect()
+        connect_for_test(robot)
         with pytest.raises(OutcomePiperValidationError, match="IK failed"):
             processor.action(
                 {
-                    "delta_x": 0.001,
-                    "delta_y": 0.0,
-                    "delta_z": 0.0,
-                    "delta_yaw": 0.0,
-                    "delta_gripper": 0.0,
+                    "stick_x": 0.001,
+                    "stick_y": 0.0,
+                    "stick_z": 0.0,
+                    "stick_yaw": 0.0,
+                    "left_trigger": 0.0,
+                    "right_trigger": 0.0,
                     "hold": True,
                     "neutral": False,
                     "emergency_stop": False,
+                    "mode_switch": False,
+                    "translation_switch": False,
+                    "home": False,
+                    "work": False,
                 }
             )
 
@@ -1584,7 +1574,10 @@ def test_cli_registers_plugins_and_forwards_arguments(monkeypatch):
 
 def test_record_injects_canonical_processor_into_official_recorder(monkeypatch):
     robot_config = SimpleNamespace(
-        execution_mode="motion", cameras={"d435": SimpleNamespace(fps=20)}, capture_timing=object()
+        execution_mode="motion",
+        cameras={"d435": SimpleNamespace(fps=20)},
+        capture_timing=object(),
+        scene=object(),
     )
     teleop_config = SimpleNamespace(control_hz=20)
     cfg = SimpleNamespace(
@@ -1629,7 +1622,7 @@ def test_record_rejects_hub_push_inside_isolated_can_namespace(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "cameras, message", [({}, "single d435"), ({"d435": SimpleNamespace(fps=30)}, "d435 fps")]
+    "cameras, message", [({"front": SimpleNamespace(fps=15)}, "exceeds a configured camera")]
 )
 def test_record_rejects_missing_camera_or_rate_mismatch(monkeypatch, cameras, message):
     robot_config = SimpleNamespace(cameras=cameras)
@@ -1648,6 +1641,7 @@ def test_record_rejects_missing_camera_or_rate_mismatch(monkeypatch, cameras, me
 
 def test_record_does_not_connect_robot_if_teleop_connect_fails(tmp_path: Path, monkeypatch):
     import lerobot.scripts.lerobot_record as official
+    from lerobot_robot_outcome_piper.scene import SceneContext
 
     robot, arm, _ = make_robot(tmp_path, mode="motion")
 
@@ -1687,9 +1681,11 @@ def test_record_does_not_connect_robot_if_teleop_connect_fails(tmp_path: Path, m
             robot.config,
             cameras={"d435": d435_config(fps=20)},
             capture_timing=CaptureTiming(0.1, 0.1, 0.1, 0.1),
+            scene=SceneContext("synthetic", "base", "view", "area"),
         ),
         teleop=xbox_config(),
         dataset=DatasetConfig(),
+        raw_root=str(tmp_path / "raw"),
         display_data=False,
         display_compressed_images=False,
         play_sounds=False,
@@ -1711,11 +1707,36 @@ def test_record_does_not_connect_robot_if_teleop_connect_fails(tmp_path: Path, m
     monkeypatch.setattr(official, "log_say", lambda *args, **kwargs: None)
     monkeypatch.setattr(official, "asdict", lambda _: {})
 
-    from lerobot_robot_outcome_piper import recording
-
-    monkeypatch.setattr(recording, "validate_dataset_schema", lambda *args: None)
     with pytest.raises(OSError, match="Xbox enumeration failed"):
         workflows.record(cfg)
 
     assert arm.calls == []
     assert robot.state is PiperState.DISCONNECTED
+
+
+def test_speed_configuration_unknown_echo_is_replaced_by_confirmed_j(tmp_path):
+    robot, arm, _ = make_robot(tmp_path, mode="motion")
+    speed, mode = arm.set_speed_percent, arm.set_motion_mode
+
+    def set_speed(value):
+        speed(value)
+        arm.mode_feedback = 255
+
+    def set_mode(value):
+        mode(value)
+        arm.mode_feedback = 1
+
+    arm.set_speed_percent = set_speed
+    arm.set_motion_mode = set_mode
+    try:
+        connect_for_test(robot)
+        assert arm.mode_feedback == 1 and robot.state is PiperState.ACTIVE
+        assert arm.calls.index(("speed_percent", 5)) < arm.calls.index(("motion_mode", "J"))
+    finally:
+        robot.disconnect()
+
+
+def connect_for_test(robot):
+    robot.connect()
+    if robot.config.execution_mode == "motion":
+        robot.enable()

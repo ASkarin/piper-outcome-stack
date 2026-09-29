@@ -1,4 +1,4 @@
-"""Frozen motion limits and the hardware acceptance binding."""
+"""Explicit runtime motion limits and live firmware compatibility."""
 
 from __future__ import annotations
 
@@ -8,22 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .documents import load_object, sha256_file
+from .documents import load_object
+from .workspace import WorkspaceGeometry
 from .errors import OutcomePiperValidationError
 
 JOINT_KEYS = tuple(f"joint_{index}.pos" for index in range(1, 7))
 ACTION_KEYS = (*JOINT_KEYS, "gripper.pos")
-
-
-def validate_teleoperation_hold(acceptance_path: Path, settings) -> None:
-    """Bind Xbox-only holding parameters without weakening the existing motion gate."""
-    from dataclasses import asdict
-
-    record = load_object(acceptance_path).get("teleoperation_hold")
-    if not isinstance(record, dict) or record.get("verified") is not True:
-        raise OutcomePiperValidationError("teleoperation hold acceptance is incomplete")
-    if any(record.get(key) != value for key, value in asdict(settings).items()):
-        raise OutcomePiperValidationError("teleoperation hold settings differ from verified values")
 
 
 @dataclass(frozen=True)
@@ -41,6 +31,59 @@ class MotionSafety:
     motion_speed_percent: int
     gripper_force_n: float
     stop_strategy: str
+    workspace_geometry: WorkspaceGeometry | None = None
+
+    def __post_init__(self):
+        if isinstance(self.workspace_geometry, dict):
+            object.__setattr__(
+                self, "workspace_geometry", WorkspaceGeometry(**self.workspace_geometry)
+            )
+        if self.workspace_geometry is not None and not isinstance(
+            self.workspace_geometry, WorkspaceGeometry
+        ):
+            raise ValueError("workspace_geometry must be a WorkspaceGeometry object")
+
+
+def check_joint_feedback(values, safety, *, target=None, tolerance=0.0):
+    """Keep measured angles intact; distinguish command bounds from arrival error.
+
+    A small excursion beyond a command boundary is measured from that boundary,
+    not from a moving target. A legal target sent by this session is still required;
+    target-to-feedback step checks and hold-arrival checks remain separate.
+    """
+    events = []
+    for i, (q, lo, hi) in enumerate(
+        zip(values, safety.joint_lower, safety.joint_upper, strict=True)
+    ):
+        if lo <= q <= hi:
+            continue
+        anchor = None if target is None else target[i]
+        boundary = lo if q < lo else hi
+        event = dict(
+            joint=i + 1,
+            measured_rad=q,
+            lower_rad=lo,
+            upper_rad=hi,
+            excess_rad=max(lo - q, q - hi),
+            last_target_rad=anchor,
+            boundary_rad=boundary,
+            tracking_error_rad=None if anchor is None else q - anchor,
+            arrival_tolerance_rad=tolerance,
+        )
+        if (
+            not math.isfinite(q)
+            or anchor is None
+            or not lo <= anchor <= hi
+            or not math.isfinite(tolerance)
+            or tolerance <= 0
+            or abs(q - boundary) > tolerance
+        ):
+            raise OutcomePiperValidationError(
+                f"joint feedback outside joint limits and arrival tolerance: {event}; "
+                f"measured_joint_rad={list(values)}"
+            )
+        events.append(event)
+    return events
 
 
 _FIRMWARE_IDENTITY_KEYS = (
@@ -50,16 +93,6 @@ _FIRMWARE_IDENTITY_KEYS = (
     "software_version",
     "production_date",
     "node_number",
-)
-_HARDWARE_IDENTITY_FIELDS = (
-    "acceptance_id",
-    "validated_at_utc",
-    "validated_by",
-    "nameplate_model",
-    "robot_serial_number",
-    "gripper_identifier",
-    "usb_can_identifier",
-    "physical_emergency_stop_identifier",
 )
 _SOFTWARE_VERSION = re.compile(r"^S-V(?P<major>\d+)\.(?P<minor>\d+)-(?P<patch>\d+)$")
 
@@ -94,113 +127,15 @@ def _validate_firmware_driver(software_version: str, firmware: str) -> tuple[int
     return version
 
 
-def _validated_acceptance(
-    acceptance_path: Path,
-    *,
-    can_interface: str,
-    firmware: str,
-    safety_path: Path | None = None,
-) -> dict[str, Any]:
-    acceptance = load_object(acceptance_path)
-    if acceptance.get("schema_version") != "outcome-piper-hardware-acceptance-v1":
-        raise OutcomePiperValidationError("unsupported hardware acceptance schema")
-    required_true = (
-        "standard_piper_verified",
-        "official_gripper_verified",
-        "official_usb_can_verified",
-        "physical_emergency_stop_verified",
-        "five_read_only_cycles_verified",
-        "communication_loss_stop_verified",
-        "watchdog_stop_verified",
-        "electronic_emergency_stop_verified",
-        "no_drop_stop_verified",
-        "stop_strategy_verified",
-    )
-    if any(acceptance.get(key) is not True for key in required_true):
-        raise OutcomePiperValidationError("hardware acceptance gate is incomplete")
-    for field in _HARDWARE_IDENTITY_FIELDS:
-        value = acceptance.get(field)
-        if not isinstance(value, str) or not value.strip():
-            raise OutcomePiperValidationError(
-                f"hardware acceptance {field} must be explicit and non-empty"
-            )
-    if acceptance["nameplate_model"] != "PiPER":
-        raise OutcomePiperValidationError(
-            "hardware acceptance nameplate_model must be exactly 'PiPER'"
-        )
-    if acceptance.get("can_interface") != can_interface:
-        raise OutcomePiperValidationError("hardware acceptance CAN interface does not match")
-    if acceptance.get("firmware") != firmware:
-        raise OutcomePiperValidationError("hardware acceptance firmware does not match")
-    if acceptance.get("stop_strategy") != "electronic_emergency_stop":
-        raise OutcomePiperValidationError(
-            "motion requires the hardware-verified electronic emergency-stop strategy"
-        )
-    if safety_path is not None and acceptance.get("safety_sha256") != sha256_file(safety_path):
-        raise OutcomePiperValidationError("hardware acceptance safety digest does not match")
-    expected_firmware = acceptance.get("firmware_identity")
-    if not isinstance(expected_firmware, dict):
-        raise OutcomePiperValidationError("hardware acceptance firmware_identity must be an object")
-    for key in _FIRMWARE_IDENTITY_KEYS:
-        value = expected_firmware.get(key)
-        if not isinstance(value, str) or not value.strip():
-            raise OutcomePiperValidationError(
-                f"hardware acceptance firmware_identity.{key} must be explicit"
-            )
-    if expected_firmware["node_type"] != "ARM_MC":
-        raise OutcomePiperValidationError("firmware identity is not a PiPER arm controller")
-    version = _validate_firmware_driver(expected_firmware["software_version"], firmware)
-    # The pinned SDK's PiPER MDH uses the J2/J3 offsets introduced in S-V1.6-3.
-    # Driver compatibility alone does not establish FK/IK model compatibility.
-    if version < (1, 6, 3):
-        raise OutcomePiperValidationError(
-            "motion requires software_version >= S-V1.6-3 for the pinned PiPER MDH model; "
-            f"acceptance records {expected_firmware['software_version']!r}"
-        )
-    return acceptance
-
-
-def validate_live_hardware_acceptance(
-    acceptance_path: Path,
-    *,
-    can_interface: str,
-    firmware: str,
-    live_firmware: Mapping[str, Any],
-) -> dict[str, str]:
-    """Bind a motion session to the exact firmware identity observed over CAN."""
-
-    acceptance = _validated_acceptance(
-        acceptance_path,
-        can_interface=can_interface,
-        firmware=firmware,
-    )
-    expected = acceptance["firmware_identity"]
-    observed: dict[str, str] = {}
-    for key in _FIRMWARE_IDENTITY_KEYS:
-        value = live_firmware.get(key)
-        if not isinstance(value, (str, int)) or isinstance(value, bool):
-            raise OutcomePiperValidationError(f"live firmware identity is missing {key}")
-        observed[key] = str(value)
-        if observed[key] != expected[key]:
-            raise OutcomePiperValidationError(
-                f"live firmware identity mismatch for {key}: "
-                f"expected {expected[key]!r}, observed {observed[key]!r}"
-            )
-    if observed["node_type"] != "ARM_MC":
-        raise OutcomePiperValidationError("live firmware is not a PiPER arm controller")
-    _validate_firmware_driver(observed["software_version"], firmware)
-    return observed
-
-
 def validate_live_firmware_driver(
     live_firmware: Mapping[str, Any], *, firmware: str
 ) -> dict[str, str]:
-    """Validate read-only sessions against the explicitly selected SDK driver."""
+    """Validate received identity fields against the explicitly selected SDK driver."""
 
     observed: dict[str, str] = {}
     for key in _FIRMWARE_IDENTITY_KEYS:
         value = live_firmware.get(key)
-        if not isinstance(value, (str, int)) or isinstance(value, bool):
+        if not isinstance(value, (str, int)) or isinstance(value, bool) or not str(value).strip():
             raise OutcomePiperValidationError(f"live firmware identity is missing {key}")
         observed[key] = str(value)
     if observed["node_type"] != "ARM_MC":
@@ -209,23 +144,20 @@ def validate_live_firmware_driver(
     return observed
 
 
-def load_motion_safety(
-    safety_path: Path,
-    acceptance_path: Path,
-    *,
-    can_interface: str,
-    firmware: str,
-) -> MotionSafety:
+def validate_motion_firmware(live_firmware: Mapping[str, Any], *, firmware: str) -> dict[str, str]:
+    observed = validate_live_firmware_driver(live_firmware, firmware=firmware)
+    version = _validate_firmware_driver(observed["software_version"], firmware)
+    if version < (1, 6, 3):
+        raise OutcomePiperValidationError(
+            "motion requires software_version >= S-V1.6-3 for the pinned PiPER MDH model"
+        )
+    return observed
+
+
+def load_motion_safety(safety_path: Path) -> MotionSafety:
     safety = load_object(safety_path)
     if safety.get("schema_version") != "outcome-piper-safety-v1":
         raise OutcomePiperValidationError("unsupported safety schema")
-    acceptance = _validated_acceptance(
-        acceptance_path,
-        can_interface=can_interface,
-        firmware=firmware,
-        safety_path=safety_path,
-    )
-
     lower = _finite_vector(safety.get("joint_lower_rad"), "joint_lower_rad", 6)
     upper = _finite_vector(safety.get("joint_upper_rad"), "joint_upper_rad", 6)
     steps = _finite_vector(safety.get("max_joint_step_rad"), "max_joint_step_rad", 6)
@@ -267,11 +199,7 @@ def load_motion_safety(
         raise OutcomePiperValidationError("gripper_force_n must be within the official 0-3 N range")
     stop_strategy = safety.get("stop_strategy")
     if stop_strategy != "electronic_emergency_stop":
-        raise OutcomePiperValidationError(
-            "stop_strategy must be the hardware-verified electronic_emergency_stop"
-        )
-    if acceptance["stop_strategy"] != stop_strategy:
-        raise OutcomePiperValidationError("hardware acceptance stop strategy does not match safety")
+        raise OutcomePiperValidationError("stop_strategy must be electronic_emergency_stop")
     return MotionSafety(
         lower,
         upper,
@@ -286,4 +214,40 @@ def load_motion_safety(
         motion_speed_percent,
         gripper_force_n,
         stop_strategy,
+        None
+        if safety.get("workspace_geometry") is None
+        else WorkspaceGeometry(**safety["workspace_geometry"]),
     )
+
+
+def workspace_step_allowed(current, target, lower, upper, *, allow_reentry=False):
+    """Keep goals inside the box, or permit strictly inward supervised reentry.
+
+    Reentry never increases violation on any axis or crosses the opposite face.
+    A stationary out-of-box pose is handled as a no-dispatch waiting tick.
+    """
+    if not all(math.isfinite(v) for v in (*current, *target)):
+        return False
+    if all(lo <= v <= hi for v, lo, hi in zip(target, lower, upper, strict=True)):
+        return True
+    if not allow_reentry:
+        return False
+    improved = False
+    for q, v, lo, hi in zip(current, target, lower, upper, strict=True):
+        if q < lo:
+            if not q <= v <= hi:
+                return False
+            improved |= v > q
+        elif q > hi:
+            if not lo <= v <= q:
+                return False
+            improved |= v < q
+        elif not lo <= v <= hi:
+            return False
+    return improved
+
+
+def step_within_limit(target: float, current: float, limit: float) -> bool:
+    """Allow arithmetic roundoff only, measured in float ULPs, not physical tolerance."""
+    roundoff = 4 * max(math.ulp(target), math.ulp(current), math.ulp(limit))
+    return abs(target - current) <= limit + roundoff

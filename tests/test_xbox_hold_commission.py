@@ -149,3 +149,57 @@ def test_b_pressed_during_confirmation_prevents_initial_commands():
     assert not arm.moves and not run.gripper.calls
     run.stop_after_failure(error.value)
     assert arm.stops == 1 and arm.enables == 0
+
+
+def test_speed_unknown_feedback_must_be_followed_by_confirmed_j():
+    run, arm, rx, clock = setup_case()
+    original_snapshot = rx.snapshot
+    original_mode = arm.set_motion_mode
+    pending = [0]
+    arm.feedback_mode = 1
+
+    def speed(value):
+        arm.speed = value
+        arm.feedback_mode = 255
+
+    def mode(value):
+        original_mode(value)
+        pending[0] = 2
+
+    def snapshot():
+        frame = original_snapshot()
+        if pending[0]:
+            pending[0] -= 1
+        else:
+            arm.feedback_mode = 1
+        frame.status.msg.mode_feedback = arm.feedback_mode
+        return frame
+
+    arm.set_speed_percent = speed
+    arm.set_motion_mode = mode
+    rx.snapshot = snapshot
+    run.run_xbox(release_reader(run, arm), confirm=lambda _: "")
+    assert run.report["status"] == "release_resume_complete"
+    names = [c["name"] for c in run.report["commands"]]
+    assert (
+        names.index("speed_percent") < names.index("CAN_J_mode") < names.index("set_gripper_width")
+    )
+    assert run.mode_required and arm.stops == 0
+
+
+def test_missing_j_confirmation_prevents_gripper_and_joint_targets():
+    run, arm, rx, clock = setup_case()
+    original = rx.snapshot
+    changed = [False]
+    arm.set_speed_percent = lambda _: changed.__setitem__(0, True)
+
+    def snapshot():
+        frame = original()
+        if changed[0]:
+            frame.status.msg.mode_feedback = 255
+        return frame
+
+    rx.snapshot = snapshot
+    with pytest.raises(RuntimeError, match="confirmation timed out"):
+        run.run_xbox(release_reader(run, arm), confirm=lambda _: "")
+    assert not arm.moves and not run.gripper.calls

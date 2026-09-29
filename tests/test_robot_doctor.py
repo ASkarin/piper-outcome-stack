@@ -54,14 +54,15 @@ def test_robot_doctor_reports_local_safety_and_permission_boundary(tmp_path: Pat
         }
     for role in ("administrator", "collaborator"):
         access = report["roles"][role]["enumerated_device_access"]
-        assert set(access) == {"can", "d435", "xbox"}
+        assert set(access) == {"can", "cameras", "xbox"}
         assert access["can"]["status"] in {
             "bind_succeeded",
             "bind_failed",
             "not_checked",
         }
         assert all(
-            access[name]["status"] in {"pass", "fail", "not_checked"} for name in ("d435", "xbox")
+            access[name]["status"] in {"pass", "fail", "not_checked"}
+            for name in ("cameras", "xbox")
         )
 
 
@@ -76,7 +77,7 @@ def test_robot_doctor_does_not_treat_visible_vcan_as_the_real_interface(
     assert inventory["can_interfaces"] == []
 
 
-def test_doctor_binds_camera_inventory_to_one_serial_and_includes_usb(tmp_path, monkeypatch):
+def test_doctor_enumerates_multiple_cameras_and_their_usb_nodes(tmp_path, monkeypatch):
     from piper_outcome_stack.ops import robot_doctor as doctor_module
 
     def host_path(path):
@@ -97,17 +98,14 @@ def test_doctor_binds_camera_inventory_to_one_serial_and_includes_usb(tmp_path, 
         node.touch()
     monkeypatch.setattr(doctor_module, "Path", host_path)
     monkeypatch.delenv("PIPER_CAN_INTERFACE", raising=False)
-    monkeypatch.setenv("PIPER_D435_SERIAL", "123456789012")
     access, inventory = doctor_module._target_devices()
-    assert inventory["d435_nodes"] == [
+    assert inventory["camera_nodes"] == [
         str(videos / "usb-Intel_RealSense_D435_123456789012-video-index0"),
+        str(videos / "usb-Intel_RealSense_D435_987654321098-video-index0"),
         str(host_path("/dev/bus/usb/001/002")),
+        str(host_path("/dev/bus/usb/001/003")),
     ]
-    assert access["d435"]["status"] == "pass"
-    monkeypatch.delenv("PIPER_D435_SERIAL")
-    access, inventory = doctor_module._target_devices()
-    assert inventory["d435_nodes"] == []
-    assert access["d435"]["status"] == "not_checked"
+    assert access["cameras"]["status"] == "pass"
 
 
 def test_robot_doctor_has_no_project_root_argument() -> None:

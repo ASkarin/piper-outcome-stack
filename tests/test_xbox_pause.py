@@ -1,7 +1,6 @@
 """Xbox control transitions and SDK dispatch with synthetic devices only."""
 
 from dataclasses import replace
-import json
 from types import SimpleNamespace as NS
 import threading
 
@@ -12,7 +11,7 @@ from lerobot_robot_outcome_piper.teleop_control import TeleopControl, TeleopStat
 from lerobot_robot_outcome_piper.processor import OutcomePiperAction
 from lerobot_robot_outcome_piper.robot import PiperState
 from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox
-from lerobot_robot_outcome_piper.errors import OutcomePiperStateError, OutcomePiperValidationError
+from lerobot_robot_outcome_piper.errors import OutcomePiperStateError, OutcomePiperIntentRejected
 
 
 class Clock:
@@ -48,7 +47,7 @@ def session(tmp_path):
     robot._start_watchdog = lambda: None
     control = TeleopControl()
     robot.configure_teleoperation(control, xbox_config().hold_settings())
-    robot.connect()
+    connect_for_test(robot)
     yield robot, arm, control, clock
     robot.disconnect()
 
@@ -232,20 +231,15 @@ def test_raw_neutral_is_calculated_before_release_zeroing():
     xbox = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
     xbox.connect()
     a = xbox.get_action()
-    assert a["delta_z"] == 0 and a["neutral"] is False
+    assert a["stick_z"] == -0.5 and a["neutral"] is False
     joystick.axes = [0, 0, 0, 0, -1, -1]
     assert xbox.get_action()["neutral"] is True
     xbox.disconnect()
 
 
-def test_hold_configuration_is_verified_before_can_construction(tmp_path):
+def test_hold_settings_do_not_require_acceptance_attestations(tmp_path):
     robot, arm, _ = make_robot(tmp_path, mode="motion")
-    path = robot.config.hardware_acceptance_path
-    r = json.loads(path.read_text())
-    r["teleoperation_hold"]["verified"] = False
-    path.write_text(json.dumps(r))
-    with pytest.raises(OutcomePiperValidationError, match="hold acceptance"):
-        robot.configure_teleoperation(TeleopControl(), xbox_config().hold_settings())
+    robot.configure_teleoperation(TeleopControl(), xbox_config().hold_settings())
     assert not arm.calls
 
 
@@ -383,3 +377,61 @@ def test_cached_feedback_cannot_confirm_continuous_hold(session):
     robot._receiver.snapshot = snapshot
     tick(session)
     assert control.hold_confirmed
+
+
+def test_rejected_joint_target_captures_hold_instead_of_sending_invalid_target(session):
+    robot, arm, control, clock = session
+    settle(session)
+    tick(session, True, True, valid_action(0.01))
+    _, result = tick(session, True, False, valid_action(2.0))
+    assert control.state is TeleopState.HOLD_REQUESTED
+    assert result["joint_1.pos"] == arm.joints[0]
+    assert robot.last_action_telemetry["rejection_reason"]
+    assert all(all(abs(v) < 1 for v in target[1]) for target in moves(arm))
+    assert "electronic_emergency_stop" not in arm.calls
+
+
+def test_holding_does_not_require_measured_pose_to_be_inside_motion_workspace(session):
+    robot, arm, control, clock = session
+    settle(session)
+    robot._safety = replace(
+        robot._safety, workspace_lower=(0.9, 0.9, 0.9), workspace_upper=(1.0, 1.0, 1.0)
+    )
+    control.request_hold()
+    tick(session)
+    assert "electronic_emergency_stop" not in arm.calls
+
+
+def test_expected_rejection_cannot_clear_latched_emergency_stop():
+    control = TeleopControl()
+    control.stop(True)
+    epoch = control.epoch
+    control.request_hold()
+    control.stop(False)
+    assert control.state is TeleopState.E_STOP and control.epoch == epoch
+
+
+def test_workspace_reentry_wait_sends_nothing_then_dispatches_inward(session):
+    robot, arm, control, clock = session
+    settle(session)
+    robot._safety = replace(robot._safety, workspace_lower=(-1.0, 0.01, -1.0))
+    control.observe(False, True)
+    _, epoch = control.observe(True, True)
+    action = OutcomePiperAction(robot.get_observation(), intent="wait", epoch=epoch)
+    action.generated_monotonic_s = clock.now
+    action.rejection_reason = "outside workspace; waiting for inward input"
+    count = len(moves(arm))
+    robot.send_action(action)
+    assert len(moves(arm)) == count and control.state is TeleopState.RUNNING
+    assert robot.last_action_telemetry["reason"] == action.rejection_reason
+    inward = valid_action()
+    inward["joint_1.pos"] = 0.05
+    robot._validate_action(inward)
+    tick(session, True, False, inward)
+    assert len(moves(arm)) == count + 1
+    outward = dict(inward, **{"joint_1.pos": -0.05})
+    with pytest.raises(OutcomePiperIntentRejected, match="workspace"):
+        robot._validate_action(outward)
+
+
+from test_plugin import connect_for_test  # noqa: E402

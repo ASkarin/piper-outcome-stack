@@ -40,7 +40,7 @@ class Robot:
 
     def connect(self):
         self.is_connected = True
-        self.state.value = "CONNECTED_DISABLED"
+        self.state.value = "CONNECTED"
 
     def get_observation(self):
         if self.fail_read:

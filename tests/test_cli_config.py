@@ -58,7 +58,6 @@ def test_official_cli_parses_complete_config_before_workflow(tmp_path, monkeypat
     values.update(
         execution_mode="motion",
         safety_path=str(tmp_path / "safety.json"),
-        hardware_acceptance_path=str(tmp_path / "acceptance.json"),
         cameras={
             "d435": dict(
                 type="intelrealsense",

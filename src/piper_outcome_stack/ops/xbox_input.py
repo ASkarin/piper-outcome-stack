@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 STAGES = (
     ("neutral", "松开所有按键、摇杆和扳机，保持不动"),
     ("hold_button", "按下并松开要用作遥操作控制的肩键，只操作这一个键"),
+    ("mode_switch_button", "按下并松开 RB 键，只操作 RB 键"),
     ("emergency_stop_button", "按下并松开 B 键，只操作 B 键"),
     ("left_stick_right", "左摇杆向右推到底，再回中"),
     ("left_stick_up", "左摇杆向上推到底，再回中"),
@@ -86,16 +87,16 @@ def sample_stage(pygame, joystick, duration, hz, emit, *, clock=time.monotonic, 
     )
 
 
-def measured_buttons(stages):
+def measured_buttons(stages, keys=("hold_button", "emergency_stop_button", "mode_switch_button")):
     if stages["neutral"]["pressed_buttons"]:
         raise ValueError("neutral measurement contains pressed buttons")
     result = {}
-    for key in ("hold_button", "emergency_stop_button"):
+    for key in keys:
         pressed = stages[key]["pressed_buttons"]
         if len(pressed) != 1:
             raise ValueError(f"{key}: expected exactly one measured button, got {pressed}")
         result[key] = pressed[0]
-    if result["hold_button"] == result["emergency_stop_button"]:
+    if len(set(result.values())) != len(keys):
         raise ValueError("shoulder and B measurements selected the same button")
     return result
 
@@ -114,14 +115,38 @@ def main(argv=None):
     parser.add_argument(
         "--hz", type=float, default=60, help="input sampling rate, not a robot control rate"
     )
+    parser.add_argument(
+        "--buttons-only", action="store_true", help="measure neutral, LB, RB and B only"
+    )
+    parser.add_argument(
+        "--home-only", action="store_true", help="measure neutral and Y for homing only"
+    )
+    parser.add_argument(
+        "--work-only", action="store_true", help="measure neutral and A for work pose only"
+    )
+    parser.add_argument(
+        "--translation-only", action="store_true", help="measure neutral and X only"
+    )
     args = parser.parse_args(argv)
+    if sum((args.home_only, args.buttons_only, args.work_only, args.translation_only)) > 1:
+        parser.error("select one of --home-only, --work-only or --buttons-only")
     if not all(math.isfinite(v) and v > 0 for v in (args.seconds, args.hz)):
         parser.error("seconds and hz must be finite and positive")
     if not args.list and (args.index is None or args.output is None):
         parser.error("measurement requires --index and --output")
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
-    import pygame
+    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="pkg_resources is deprecated as an API.*",
+            category=UserWarning,
+            module="pygame.pkgdata",
+        )
+        import pygame
 
     pygame.display.init()
     pygame.joystick.init()
@@ -164,12 +189,34 @@ def main(argv=None):
 
             try:
                 print("只测手柄输入。每轮先按 Enter，然后在采样期间按提示操作。")
-                for stage, instruction in STAGES:
+                stages = [
+                    s
+                    for s in STAGES
+                    if not args.buttons_only or s[0] == "neutral" or s[0].endswith("_button")
+                ]
+                if args.home_only:
+                    stages = [STAGES[0], ("home_button", "按下并松开 Y 键，只操作 Y 键")]
+                if args.work_only:
+                    stages = [STAGES[0], ("work_pose_button", "按下并松开 A 键，只操作 A 键")]
+                if args.translation_only:
+                    stages = [
+                        STAGES[0],
+                        ("translation_switch_button", "按下并松开 X 键，只操作 X 键"),
+                    ]
+                for stage, instruction in stages:
                     input(f"{instruction}；准备好后按 Enter，随后采样 {args.seconds:g} 秒：")
                     result = sample_stage(pygame, joystick, args.seconds, args.hz, emit)
                     report["stages"][stage] = result
                     print(json.dumps(dict(stage=stage, **result), ensure_ascii=False))
-                report["buttons"] = measured_buttons(report["stages"])
+                report["buttons"] = (
+                    measured_buttons(report["stages"], ("translation_switch_button",))
+                    if args.translation_only
+                    else measured_buttons(report["stages"], ("home_button",))
+                    if args.home_only
+                    else measured_buttons(report["stages"], ("work_pose_button",))
+                    if args.work_only
+                    else measured_buttons(report["stages"])
+                )
                 report["status"] = "input_measured"
                 emit("measurement_complete", buttons=report["buttons"])
             except BaseException as exc:

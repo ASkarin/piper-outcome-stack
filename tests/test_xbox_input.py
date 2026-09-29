@@ -57,8 +57,13 @@ def test_button_mapping_requires_distinct_actual_presses():
         "neutral": {"pressed_buttons": []},
         "hold_button": {"pressed_buttons": [4]},
         "emergency_stop_button": {"pressed_buttons": [1]},
+        "mode_switch_button": {"pressed_buttons": [5]},
     }
-    assert xbox_input.measured_buttons(stages) == {"hold_button": 4, "emergency_stop_button": 1}
+    assert xbox_input.measured_buttons(stages) == {
+        "hold_button": 4,
+        "emergency_stop_button": 1,
+        "mode_switch_button": 5,
+    }
     stages["emergency_stop_button"]["pressed_buttons"] = [4]
     with pytest.raises(ValueError, match="same button"):
         xbox_input.measured_buttons(stages)
@@ -77,3 +82,14 @@ def test_input_tool_has_no_control_backend_imports():
             imported.append(node.module or "")
     forbidden = ("lerobot", "pyAgxArm", "can", "pyrealsense2", "socket", "subprocess")
     assert not any(name.startswith(forbidden) for name in imported)
+
+
+def test_home_button_measurement_requires_one_real_press():
+    stages = {"neutral": {"pressed_buttons": []}, "home_button": {"pressed_buttons": [3]}}
+    assert xbox_input.measured_buttons(stages, ("home_button",)) == {"home_button": 3}
+    stages["home_button"]["pressed_buttons"] = []
+    with pytest.raises(ValueError, match="exactly one"):
+        xbox_input.measured_buttons(stages, ("home_button",))
+    stages["home_button"]["pressed_buttons"] = [2, 3]
+    with pytest.raises(ValueError, match="exactly one"):
+        xbox_input.measured_buttons(stages, ("home_button",))
