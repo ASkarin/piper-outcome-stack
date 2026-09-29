@@ -5,7 +5,7 @@
 | Area | State | Entry |
 |---|---|---|
 | Task A ACT baseline | 40k correction-mixed model; operator-reported complete pick/place at P1–P4, N1 failed; no measured success rate yet | [process record](docs/reports/ACT实机全过程记录_20260929.md) |
-| Policy execution | 50 Hz, re-infer every 3 steps, TE 0.01 on decoded absolute targets, SDK speed 75% | `infra/acceptance/piper_policy_trial.py run --position P1 ...` |
+| Policy execution | 50 Hz, inference every step with official ACT TE 0.01 on decoded absolute targets, SDK speed 75% (adopted 2026-09-30; P1–P4 successes were observed at 3 steps/inference) | `infra/acceptance/piper_policy_trial.py run --position P1 --n-action-steps 1 --temporal-ensemble-coeff 0.01 ...` |
 | Trial outcomes | Operator labels as sidecars; per-position rates with Wilson 95% intervals | `python -m piper_outcome_stack.policy_trials label\|summarize` |
 | Xbox capture | 50 Hz control/Dataset, 640×480 RGBD60, sealed raw → offline conversion | `piper record`, `piper convert SESSION` ([operator](infra/local-controller/operator/README.md)) |
 | Teach capture | Receive-only raw capture, offline N−1 conversion | [teach collection](docs/operations/piper_teach_collection.md) |
@@ -148,8 +148,10 @@ rate. The full history, evidence and limits are in the
 - Execution: `infra/acceptance/piper_policy_trial.py` with `policy_execution.py`,
   `policy_motion.py`, `policy_startup.py` and `policy_rgb_recording.py`. Each chunk is
   decoded to absolute rad/m targets at its own anchor. Temporal ensembling (0.01) runs
-  on decoded targets at 50 Hz control time. The current setting re-infers every 3 steps at
-  SDK speed 75%. Enter-confirmed move to A, LB start/cancel, B stop, freshness, step and
+  on decoded targets at 50 Hz control time. The adopted setting (2026-09-30) infers at
+  every control step (`--n-action-steps 1`), the official ACT TE mode, at SDK speed 75%.
+  The operator-reported P1–P4 successes used 3 steps per inference; the per-step
+  setting is evaluated separately. Enter-confirmed move to A, LB start/cancel, B stop, freshness, step and
   workspace checks are unchanged. Automatic cyclic GC is deferred during motion.
 - `training.py`/`training_selection.py` select policy inputs and delegate to official
   LeRobot training. The per-run training, compression and resume scripts for the current
