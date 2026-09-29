@@ -85,19 +85,21 @@ install -d -m 0750 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
     "${HISTORY_ROOT}/snapshots" \
     "${COMMAND_ROOT}" \
     "${LIB_ROOT}"
-install -m 0750 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
-    "${SOURCE_BIN}/piper-artifact-fetch" \
-    "${SOURCE_BIN}/piper-artifact-promote" \
-    "${SOURCE_BIN}/piper-env-doctor" \
-    "${SOURCE_BIN}/piper-gpu-run" \
-    "${SOURCE_BIN}/piper-python" \
-    "${COMMAND_ROOT}/"
-install -m 0640 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
-    "${SOURCE_LIB}/piper_container_common.py" \
-    "${LIB_ROOT}/piper_container_common.py"
-install -m 0640 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
-    "${PROFILE_SOURCE}" \
-    "${PROFILE_TARGET}"
+# Seed missing tools only; an ordinary restart must preserve in-place updates.
+for command in piper-artifact-fetch piper-artifact-promote piper-env-doctor piper-gpu-run piper-python; do
+    if [[ ! -e "${COMMAND_ROOT}/${command}" ]]; then
+        install -m 0750 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
+            "${SOURCE_BIN}/${command}" "${COMMAND_ROOT}/${command}"
+    fi
+done
+if [[ ! -e "${LIB_ROOT}/piper_container_common.py" ]]; then
+    install -m 0640 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
+        "${SOURCE_LIB}/piper_container_common.py" "${LIB_ROOT}/piper_container_common.py"
+fi
+if [[ ! -e "${PROFILE_TARGET}" ]]; then
+    install -m 0640 -o "${PIPER_ADMIN_USER}" -g "${PIPER_GROUP_NAME}" \
+        "${PROFILE_SOURCE}" "${PROFILE_TARGET}"
+fi
 
 chown -R "${PIPER_ADMIN_USER}:${PIPER_GROUP_NAME}" \
     "${SHARED_ENV}" \
@@ -108,6 +110,9 @@ chown -R "${PIPER_ADMIN_USER}:${PIPER_GROUP_NAME}" \
 chmod -R u+rwX,g+rX,g-w,o-rwx "${SHARED_ENV}"
 chmod 0750 "${HISTORY_ROOT}" "${HISTORY_ROOT}/snapshots" "${COMMAND_ROOT}" "${LIB_ROOT}"
 chmod 0640 "${PROFILE_TARGET}" "${LIB_ROOT}/piper_container_common.py"
+
+# Login shells must load the maintained profile, including after recreation.
+install -m 0644 "${PROFILE_TARGET}" /etc/profile.d/piper.sh
 
 "${SHARED_ENV}/bin/python" -m pip --version
 "${SHARED_ENV}/bin/python" -c "import torch; print(torch.__version__)"

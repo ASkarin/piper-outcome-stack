@@ -200,10 +200,25 @@ jobs:
   container:
     name: container-build
     runs-on: ubuntu-24.04
-    needs: [validate, simulation]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect base-image input changes
+        id: image-inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            build=$(python infra/container/ci/build_inputs.py "$BASE_SHA" "$HEAD_SHA")
+            echo "build=$build" >> "$GITHUB_OUTPUT"
+          fi
       - name: Reclaim runner disk for the CUDA container build
+        if: steps.image-inputs.outputs.build == 'true'
         run: infra/container/ci/reclaim_runner_space.sh
       - name: Validate Compose rendering
         env:
@@ -219,13 +234,17 @@ jobs:
           PIPER_GROUP_GID: "20003"
         run: docker compose -f infra/container/compose.yaml config --quiet
       - name: Build the locked container without publishing
+        if: steps.image-inputs.outputs.build == 'true'
         run: docker build --file infra/container/Dockerfile --tag piper-outcome-stack-ci:${{ github.sha }} .
+      - name: Report unchanged base-image inputs
+        if: steps.image-inputs.outputs.build != 'true'
+        run: echo "Base-image inputs unchanged; container-build completed without building an image."
 
   publish:
     name: publish-image
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_image }}
     runs-on: ubuntu-24.04
-    needs: [validate, local-controller-integration, container]
+    needs: [validate, simulation, local-controller-integration, container]
     permissions:
       contents: read
       packages: write

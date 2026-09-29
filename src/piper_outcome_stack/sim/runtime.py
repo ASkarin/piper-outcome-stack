@@ -36,8 +36,8 @@ def load_config(path=DEFAULT_CONFIG):
     if min(cfg["table_half_size_m"]) <= 0:
         raise ValueError("table half sizes must be positive")
     camera = cfg["camera"]
-    if camera["name"] != "d435":
-        raise ValueError("only a single virtual d435 RGB camera is supported")
+    if not isinstance(camera["name"], str) or not camera["name"].strip():
+        raise ValueError("virtual camera name must be non-empty")
     for key in ("width", "height"):
         if type(camera[key]) is not int or not 0 < camera[key] <= 2048:
             raise ValueError("camera size must be within 1..2048 pixels")
@@ -87,7 +87,7 @@ class Simulation:
         ET.SubElement(
             world,
             "camera",
-            name="d435",
+            name=camera["name"],
             pos=fmt(camera["position_m"]),
             xyaxes=fmt(np.r_[right, up]),
             resolution=f"{camera['width']} {camera['height']}",
@@ -201,7 +201,7 @@ class Simulation:
             self.renderer = mujoco.Renderer(
                 self.model, height=camera["height"], width=camera["width"]
             )
-        self.renderer.update_scene(self.data, camera="d435")
+        self.renderer.update_scene(self.data, camera=self.config["camera"]["name"])
         return self.renderer.render().copy()
 
     def close(self):

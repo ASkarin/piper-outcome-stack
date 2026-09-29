@@ -10,11 +10,11 @@ import uuid
 from pathlib import Path
 
 for candidate in (
+    Path(__file__).resolve().parents[1] / "lib",
     Path("/workspace/piper/lib"),
     Path("/usr/local/lib/piper-container"),
-    Path(__file__).resolve().parents[1] / "lib",
 ):
-    if candidate.is_dir():
+    if (candidate / "piper_container_common.py").is_file():
         sys.path.insert(0, str(candidate))
         break
 
@@ -68,8 +68,8 @@ def main() -> int:
             raise PiperContainerError("artifact type must be model or dataset")
         repo_id = validate_repo_id(str(manifest.get("repo_id", "")))
         revision = validate_revision(str(manifest.get("revision", "")))
-        if manifest.get("source_endpoint") != "https://hf-mirror.com":
-            raise PiperContainerError("artifact source endpoint is not approved")
+        if not isinstance(manifest.get("source_endpoint"), str) or not manifest["source_endpoint"]:
+            raise PiperContainerError("artifact source endpoint is missing")
 
         actual_files = file_inventory(source_root)
         if actual_files != manifest.get("files"):

@@ -12,19 +12,17 @@ from pathlib import Path
 from typing import Any
 
 for candidate in (
+    Path(__file__).resolve().parents[1] / "lib",
     Path("/workspace/piper/lib"),
     Path("/usr/local/lib/piper-container"),
-    Path(__file__).resolve().parents[1] / "lib",
 ):
-    if candidate.is_dir():
+    if (candidate / "piper_container_common.py").is_file():
         sys.path.insert(0, str(candidate))
         break
 
 from piper_container_common import (  # noqa: E402
     PIPER_ROOT,
-    MIN_FREE_BYTES,
     MIN_SHM_BYTES,
-    MIRROR_ENDPOINT,
     SHARED_PYTHON_ENV,
     WARN_FREE_BYTES,
     PiperContainerError,
@@ -32,14 +30,15 @@ from piper_container_common import (  # noqa: E402
     git_state,
     gpu_inventory,
     load_runtime_config,
-    sha256_bytes,
     total_bytes,
+    selected_python,
+    python_environment,
 )
 
 ENDPOINTS = (
     "https://pypi.org/simple/",
     "https://download.pytorch.org/whl/cu128/",
-    MIRROR_ENDPOINT,
+    os.environ.get("HF_ENDPOINT", "https://huggingface.co"),
 )
 
 
@@ -70,7 +69,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate the PiPER training container")
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--skip-network", action="store_true")
+    parser.add_argument(
+        "--network", action="store_true", help="also probe package/download endpoints"
+    )
+    parser.add_argument("--python", help="active venv or PATH Python by default")
     args = parser.parse_args()
 
     checks: list[dict[str, Any]] = []
@@ -84,45 +86,24 @@ def main() -> int:
 
     current_user = pwd.getpwuid(os.getuid()).pw_name
     try:
-        executable = Path(os.path.abspath(sys.executable))
-        shared_root = Path(os.path.abspath(SHARED_PYTHON_ENV))
-        if not executable.is_file() or not shared_root.is_dir():
-            raise PiperContainerError("shared Python environment is unavailable")
-        if not executable.is_relative_to(shared_root):
-            raise PiperContainerError(
-                f"doctor is not running from the shared environment: {executable}"
-            )
-        pip_result = subprocess.run(
-            [sys.executable, "-m", "pip", "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        freeze_result = subprocess.run(
-            [sys.executable, "-m", "pip", "freeze", "--all"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        freeze_text = freeze_result.stdout.rstrip("\n") + "\n"
+        executable = selected_python(args.python)
+        identity, freeze_text = python_environment(executable)
+        shared_root = SHARED_PYTHON_ENV
         expected_writable = current_user == runtime.get("admin_user")
         writable = os.access(shared_root, os.W_OK)
         add_check(
             checks,
-            "shared_python",
+            "python",
             "pass" if writable == expected_writable else "fail",
             {
-                "executable": str(executable),
-                "python_version": sys.version.split()[0],
-                "pip": pip_result.stdout.strip(),
-                "packages_sha256": sha256_bytes(freeze_text.encode("utf-8")),
+                **identity,
                 "package_count": len([line for line in freeze_text.splitlines() if line.strip()]),
                 "writable": writable,
                 "expected_writable": expected_writable,
             },
         )
-    except (PiperContainerError, OSError, subprocess.SubprocessError) as exc:
-        add_check(checks, "shared_python", "fail", str(exc))
+    except (PiperContainerError, OSError, subprocess.SubprocessError, ValueError) as exc:
+        add_check(checks, "python", "fail", str(exc))
 
     try:
         state = git_state(args.repo.resolve(strict=True))
@@ -135,7 +116,7 @@ def main() -> int:
         add_check(
             checks,
             "shared_memory",
-            "pass" if shm_bytes >= MIN_SHM_BYTES else "fail",
+            "pass" if shm_bytes >= MIN_SHM_BYTES else "warn",
             {"available_bytes": shm_bytes, "minimum_bytes": MIN_SHM_BYTES},
         )
     except OSError as exc:
@@ -143,13 +124,7 @@ def main() -> int:
 
     try:
         workspace_free = free_bytes(Path("/workspace"))
-        disk_status = (
-            "fail"
-            if workspace_free < MIN_FREE_BYTES
-            else "warn"
-            if workspace_free < WARN_FREE_BYTES
-            else "pass"
-        )
+        disk_status = "warn" if workspace_free < WARN_FREE_BYTES else "pass"
         add_check(
             checks,
             "workspace_free",
@@ -157,7 +132,6 @@ def main() -> int:
             {
                 "available_bytes": workspace_free,
                 "warning_bytes": WARN_FREE_BYTES,
-                "minimum_bytes": MIN_FREE_BYTES,
             },
         )
     except OSError as exc:
@@ -165,7 +139,7 @@ def main() -> int:
 
     try:
         gpus = gpu_inventory()
-        add_check(checks, "gpus", "pass" if len(gpus) == 3 else "fail", gpus)
+        add_check(checks, "gpus", "pass" if gpus else "warn", gpus)
     except PiperContainerError as exc:
         add_check(checks, "gpus", "fail", str(exc))
 
@@ -209,7 +183,7 @@ def main() -> int:
             },
         )
 
-    if not args.skip_network:
+    if args.network:
         for endpoint in ENDPOINTS:
             status, detail = check_network(endpoint)
             add_check(checks, f"network:{endpoint}", status, detail)

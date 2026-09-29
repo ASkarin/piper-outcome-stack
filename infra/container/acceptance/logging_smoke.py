@@ -20,7 +20,7 @@ def required_directory(name: str) -> Path:
 
 def main() -> int:
     if os.environ.get("WANDB_MODE") != "offline":
-        raise RuntimeError("WANDB_MODE must be offline during formal runs")
+        raise RuntimeError("WANDB_MODE must be offline during this logging acceptance")
 
     run_id = os.environ.get("PIPER_RUN_ID")
     if not run_id:
