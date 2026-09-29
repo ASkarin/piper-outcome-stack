@@ -47,7 +47,7 @@ The user removed speculative hardware-acceptance startup gates. Do not require a
 
 ## Approved planning scope, 2026-09-08
 
-Simulation/sim2real is a core workstream alongside real ACT learning and action-outcome prediction. The planning repository's `docs/roadmap/piper_sim2real_workstream.md` defines S0–S3 and the three ACT data-source comparisons. This approval is documentation-only: code, tests, runtime configs, dependency locks/installations, assets, experiments and hardware execution await explicit subsequent approval. The existing SDK/LeRobot control path stays unchanged. The user subsequently approved repairs and device code synchronization. This authorizes the existing-stack fixes and binding PR-20260908-01, but still does not authorize simulation implementation or hardware motion.
+Simulation/sim2real is a core workstream alongside real ACT learning and action-outcome prediction. The planning repository's `docs/roadmap/piper_sim2real_workstream.md` defines S0–S3 and the three ACT data-source comparisons. This approval is documentation-only: code, tests, runtime configs, dependency locks/installations, assets, experiments and hardware execution await explicit subsequent approval. The existing SDK/LeRobot control path stays unchanged. The user subsequently approved repairs and device code synchronization. This authorizes the existing-stack fixes and binding PR-20260908-01, but still does not authorize simulation implementation or hardware motion. Runtime `configs/project.json` now binds PR-20260909-01; PR-20260921-01 is the latest amendment.
 
 ## S0/S1 implementation approval
 

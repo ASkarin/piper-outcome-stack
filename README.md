@@ -1,5 +1,21 @@
 # PiPER OutcomeStack
 
+## Current status and entry points (2026-09-29)
+
+| Area | State | Entry |
+|---|---|---|
+| Task A ACT baseline | 40k correction-mixed model; operator-reported complete pick/place at P1–P4, N1 failed; no measured success rate yet | [process record](docs/reports/ACT实机全过程记录_20260929.md) |
+| Policy execution | 50 Hz, re-infer every 3 steps, TE 0.01 on decoded absolute targets, SDK speed 75% | `infra/acceptance/piper_policy_trial.py run --position P1 ...` |
+| Trial outcomes | Operator labels as sidecars; per-position rates with Wilson 95% intervals | `python -m piper_outcome_stack.policy_trials label\|summarize` |
+| Xbox capture | 50 Hz control/Dataset, 640×480 RGBD60, sealed raw → offline conversion | `piper record`, `piper convert SESSION` ([operator](infra/local-controller/operator/README.md)) |
+| Teach capture | Receive-only raw capture, offline N−1 conversion | [teach collection](docs/operations/piper_teach_collection.md) |
+| Training | Private editable env on `piper-training`, official `lerobot-train` | [training workflow](infra/container/README.md) |
+| Simulation | S0/S1 only (geometry, archived replay) | [simulation](docs/operations/piper_simulation.md) |
+| Protocol | Runtime binds PR-20260909-01; latest amendment PR-20260921-01 | [preregistration](docs/preregistration/) |
+
+Sections below record the approved behavior and its dates; later sections supersede earlier
+planning-only statements where they say so.
+
 Current operator default (approved 2026-09-20): piper record uses 50 Hz control/Dataset and 640×480 RGBD at 60 fps, with time-based gripper reference and incremental A/Y planning. Save seals raw data; piper convert SESSION creates the independent Dataset offline. See [operator shortcuts](infra/local-controller/operator/README.md). Historical 20 Hz datasets and teaching next-state labels retain their own provenance.
 
 PiPER OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
