@@ -8,7 +8,8 @@ from lerobot_robot_outcome_piper.processor import OutcomePiperAction
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.teleop_control import TeleopState
 
-from .policy_execution import CONTROL_PERIOD_S, POLICY_CAMERA, predict_candidate
+from piper_policy.policy_execution import CONTROL_PERIOD_S, POLICY_CAMERA
+from .policy_execution import predict_candidate
 
 
 class PolicyInput:

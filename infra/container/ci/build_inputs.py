@@ -25,6 +25,7 @@ def needs_image_build(paths: list[str]) -> bool:
         path in IMAGE_FILES
         or path.startswith(
             (
+                "packages/piper_policy/",
                 "infra/container/bin/",
                 "infra/container/lib/",
                 "infra/container/ci/",

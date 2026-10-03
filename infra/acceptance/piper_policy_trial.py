@@ -9,11 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from piper_outcome_stack.policy_execution import (
-    CONTROL_HZ,
-    ACTChunkPredictor,
-    verify_reference_inputs,
-)
+from piper_policy.policy_execution import CONTROL_HZ, ACTChunkPredictor
+from piper_outcome_stack.policy_execution import verify_reference_inputs
 from piper_outcome_stack.policy_motion import PolicyInput, run_policy_trial
 
 

@@ -625,7 +625,9 @@ def test_explicit_depth_export_uses_original_z16_and_supports_relocation(tmp_pat
     with pytest.raises(FileNotFoundError):
         audit_teach(out, ds)
     assert audit_teach(out, ds, raw_source=moved)["frames"] == 3
-    first = next((moved / "attempt-one").glob("*.npz"))
+    # Mutate an exported observation, not the terminal label-only frame.
+    row = json.loads((moved / "attempt-one/samples.jsonl").read_text().splitlines()[0])
+    first = moved / "attempt-one" / row["files"]["d435.depth"]
     with np.load(first) as z:
         values = z["depth"].copy()
     np.savez(first, depth=values + 1)

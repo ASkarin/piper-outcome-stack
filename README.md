@@ -176,7 +176,7 @@ The maintained operator commissioning entry is `infra/acceptance/piper_joint_com
 
 ## MuJoCo S0/S1 simulation
 
-The approved first simulation implementation is available through `piper-outcome-stack sim`: independent `.venv-sim`, the pinned standard PiPER model, geometry checks, desktop pose display, and archived-feedback / commanded-servo replay. Follow [the simulation tutorial](docs/operations/piper_simulation.md).
+Simulation is maintained in the independent `piper-simulation` repository. Use its `piper-sim` command and isolated environment; see [repository boundaries and locations](docs/operations/piper_simulation.md).
 
 S0/S1 uses an illustrative uncalibrated table/camera and unidentified actuator settings. Recorded feedback excursions are preserved and reported; target validation remains strict. It does not import the real robot plugin or connect to CAN/camera/gamepad, train a policy, implement S2/S3, or deploy a formal release. Earlier planning-only statements above describe the previous approval stage; this S0/S1 scope has now been explicitly approved.
 
@@ -217,3 +217,9 @@ Xbox保留；新增`teach-record`只接收原始RGBD/关节/夹爪反馈，`teac
 ## Training development
 
 On `piper-training`, install needed tools directly and use a private editable environment. Code edits run after restarting the process; PRs, releases and image builds are not development prerequisites. Formal training records a fixed commit, actual environment and versioned data without requiring a merged PR or project release. See [the training workflow](infra/container/README.md) for setup, GPU commands and collaborator permissions.
+
+## 独立仿真模块（2026-10-04）
+
+仿真、模型资产、回放、专家采集及仿真训练评估位于独立 `piper-simulation` 仓库。Mac：`/Users/csming/Documents/CoderLife/piper-simulation`；训练机：`/workspace/projects/piper-simulation`。入口为其独立环境的 `piper-sim`，本项目不再提供 `sim` 子命令或 MuJoCo 安装选项。当前命令见新仓库 README；下文/历史文档的旧仿真命令仅对应迁移前快照。
+
+共享纯策略在 `packages/piper_policy`，版本 0.1.0；真实观测时效、限位检查、设备下发和真实数据业务仍在本项目。`uv sync --frozen --extra remote-training` 或 `--extra local-controller` 安装对应策略依赖。仿真仓库使用固定 wheel；数据通过显式 LeRobot v3 Dataset 路径交互，不自动混入真实训练。

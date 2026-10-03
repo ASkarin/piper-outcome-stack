@@ -9,7 +9,7 @@ from lerobot_robot_outcome_piper.teleop_control import TeleopState
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.workflows import _processor
 
-from .policy_execution import CONTROL_PERIOD_S
+from piper_policy.policy_execution import CONTROL_PERIOD_S
 from .policy_motion import finish_hold
 
 

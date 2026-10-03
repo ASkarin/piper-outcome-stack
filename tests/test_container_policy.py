@@ -177,7 +177,7 @@ def test_image_publication_requires_local_controller_integration() -> None:
         encoding="utf-8"
     )
     publish_job = workflow.split("\n  publish:", maxsplit=1)[1]
-    assert "needs: [validate, simulation, local-controller-integration, container]" in publish_job
+    assert "needs: [validate, local-controller-integration, container]" in publish_job
 
 
 def test_retired_name_scan_checks_paths_and_contents() -> None:

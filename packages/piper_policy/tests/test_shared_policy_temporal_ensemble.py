@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from piper_outcome_stack.policy_execution import ACTChunkPredictor
+from piper_policy.policy_execution import ACTChunkPredictor
 
 
 def predictor(horizon=50, coefficient=0.01):
