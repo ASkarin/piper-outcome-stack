@@ -26,6 +26,11 @@ class PiperRecordConfig(RecordConfig):
 
     export_depth: bool = False
     raw_root: str | None = None
+    recording_tasks: dict[str, str] | None = None
+    recording_position: str | None = None
+    recording_layout_description: str | None = None
+    recording_split: str | None = None
+    recording_task_goal: int | None = None
 
 
 @dataclass

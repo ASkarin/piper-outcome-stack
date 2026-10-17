@@ -1,5 +1,7 @@
 # PiPER OutcomeStack
 
+2026-10-17：当前实机ACT阶段收尾、四模型固定，准备阶段3必要SmolVLA与sim2real衔接。见[阶段交接](docs/reports/stage2_closeout_20261017.md)及[固定接口](docs/operations/stage2_interface_contract_20261017.md)。最新验证包含失败，不能称全项目验收完成。
+
 ## Current status and entry points (2026-09-29)
 
 | Area | State | Entry |

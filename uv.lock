@@ -1174,7 +1174,7 @@ dev = [
 
 [[package]]
 name = "piper-policy"
-version = "0.1.0"
+version = "0.1.13"
 source = { editable = "packages/piper_policy" }
 dependencies = [
     { name = "lerobot", extra = ["smolvla", "training"] },

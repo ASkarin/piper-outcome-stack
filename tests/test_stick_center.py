@@ -70,8 +70,6 @@ def test_center_captures_once_gripper_independent_and_fresh_input_resumes(setup)
     target = robot._hold_window.target[:]
     reference = holding_reference(robot.last_action_telemetry)
     assert reference["values"]["gripper.pos"] == pytest.approx(0.034)
-    tick(x=0.1)  # New stick input during unconfirmed hold is not queued.
-    assert len(solves) == initial_solves
     clock.advance()
     tick()
     assert c.state is TeleopState.CENTERED
@@ -92,6 +90,107 @@ def test_center_captures_once_gripper_independent_and_fresh_input_resumes(setup)
     tick(x=-0.1)
     assert c.state is TeleopState.RUNNING and len(solves) == initial_solves + 1
     assert solves[-1][0] == arm.joints
+
+
+def test_new_input_resumes_before_center_confirmation_with_fresh_feedback(setup):
+    (robot, arm, c, clock), p, solves, tick = setup
+    tick()
+    assert c.state is TeleopState.CENTERING and not c.hold_confirmed
+    holds = len(moves(arm))
+    old_epoch = c.epoch
+    arm.joints = [0.006] * 6
+    action = tick(x=-0.1)
+    assert clock.now < robot._hold_window.after_s + robot._hold_settings.stable_time_s
+    assert c.state is TeleopState.RUNNING and c.epoch > old_epoch
+    assert action.intent == "run" and solves[-1][0] == arm.joints
+    assert len(moves(arm)) == holds + 1
+    assert robot.last_action_telemetry["result"] == "sdk_returned"
+    assert robot.last_action_telemetry["center_resume"]
+    assert not c.hold_confirmed  # This is continued input, not fabricated confirmation.
+    assert c.reference_state is None
+
+
+def test_center_resume_resets_velocity_and_invalidates_old_reference(setup):
+    from pyAgxArm.utiles.mdh_kinematics import fk_from_mdh, get_mdh
+    from lerobot_robot_outcome_piper.continuous_reference import ReferenceSettings
+    from lerobot_robot_outcome_piper.workspace import grasp_position
+
+    (robot, arm, c, clock), p, solves, tick = setup
+    p.streaming_reference = dict(period_s=0.02, ramp_time_s=0.5, lead_cycles=2.4)
+    settings = ReferenceSettings(**p.streaming_reference)
+    tick(x=0.5)
+    pending = tick(x=0.5, send=False)
+    previous_velocity = c.reference_state["velocity"][0]
+    assert previous_velocity > 0
+    tick()
+    assert not c.reference_valid(pending.epoch, pending.reference_plan)
+    assert c.reference_state is None
+    resumed = tick(x=-0.5)
+    reference = resumed.reference_plan["reference"]
+    max_speed = p.max_xyz_step_m / settings.period_s
+    assert reference["velocity"][0] == pytest.approx(
+        -max_speed * settings.period_s / settings.ramp_time_s
+    )
+    assert reference["dt_s"] == settings.period_s
+    feedback_pose = fk_from_mdh(list(get_mdh("piper")), arm.joints)
+    feedback_position = grasp_position(feedback_pose, p.safety.workspace_geometry)
+    assert abs(reference["position"][0] - feedback_position[0]) < 0.01
+    count = len(moves(arm))
+    robot.send_action(pending)
+    assert len(moves(arm)) == count and robot.last_action_telemetry["result"] == "discarded"
+
+
+@pytest.mark.parametrize("reason", ["release", "protection", "mode", "drift"])
+def test_center_continuation_does_not_bypass_rearming_or_reconfirmation(setup, reason):
+    (robot, arm, c, clock), p, solves, tick = setup
+    tick()
+    if reason == "release":
+        tick(lb=False)
+        tick(x=0.1, lb=True)
+    elif reason == "protection":
+        c.request_protection_hold("桌面保护")
+        tick(x=0.1)
+    elif reason == "mode":
+        c.observe(True, True, mode_switch=True)
+        tick(x=0.1)
+    else:
+        clock.advance()
+        tick()
+        arm.joints[0] += 0.03
+        tick()
+        tick(x=0.1)
+    before = len(solves)
+    tick(x=0.1)
+    assert len(solves) == before and c.state is not TeleopState.RUNNING
+    assert not robot.last_action_telemetry.get("center_resume", False)
+
+
+def test_unadmitted_run_cannot_create_center_continuation(setup):
+    (robot, arm, c, clock), p, solves, tick = setup
+    tick(lb=False)
+    clock.advance()
+    tick(lb=False)
+    tick()
+    tick(x=0.1, send=False)  # A generated action is not an admitted running epoch.
+    tick()
+    before = len(moves(arm))
+    tick(x=-0.1)
+    assert c.state is TeleopState.HOLD_REQUESTED
+    assert len(moves(arm)) == before
+    assert not robot.last_action_telemetry.get("center_resume", False)
+
+
+def test_b_preempts_an_unconfirmed_center_resume(setup):
+    (robot, arm, c, clock), p, solves, tick = setup
+    tick()
+    resumed = tick(x=-0.1, send=False)
+    before = len(moves(arm))
+    gripper_before = list(arm.gripper.commands)
+    robot.request_emergency_stop("B before center resume")
+    with pytest.raises(RuntimeError):
+        robot.send_action(resumed)
+    assert len(moves(arm)) == before and arm.gripper.commands == gripper_before
+    assert c.state is TeleopState.E_STOP
 
 
 def test_lb_release_disarms_even_when_trigger_remains_pressed(setup):

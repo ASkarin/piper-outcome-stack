@@ -17,6 +17,7 @@ from .safety import ACTION_KEYS
 
 
 from .action_audit import holding_reference, validate_action
+from .demonstration_segments import DemonstrationTracker
 
 
 class TelemetryDataset:
@@ -34,6 +35,7 @@ class TelemetryDataset:
         self.attempt = 0
         self.last_sequence = None
         self.hold_references = {}
+        self.demonstration = DemonstrationTracker()
         from .timing_report import TimingValidator
 
         self._raw = getattr(dataset, "is_raw", False)
@@ -127,6 +129,7 @@ class TelemetryDataset:
             "attempt": self.attempt,
             "observation": observation,
             "action": action,
+            "demonstration": self.demonstration.observe(action),
         }
         row["raw_depth"] = {}
         depth_files = {}
@@ -191,6 +194,7 @@ class TelemetryDataset:
         self.saved_episodes.add(index)
         self.pending = []
         self.attempt += 1
+        self.demonstration = DemonstrationTracker()
         if self._raw_timing is not None:
             from .timing_report import TimingValidator
 
@@ -206,6 +210,7 @@ class TelemetryDataset:
         self.dataset.clear_episode_buffer()
         self.pending = []
         self.attempt += 1
+        self.demonstration = DemonstrationTracker()
         if self._raw_timing is not None:
             from .timing_report import TimingValidator
 
@@ -294,6 +299,31 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
 
     if not isinstance(cfg.teleop, OutcomePiperXboxConfig):
         raise ValueError("record requires Xbox raw capture configuration")
+    tasks = getattr(cfg, "recording_tasks", None)
+    position = getattr(cfg, "recording_position", None)
+    task_goal = getattr(cfg, "recording_task_goal", None)
+    split = getattr(cfg, "recording_split", None)
+    layout_description = getattr(cfg, "recording_layout_description", None)
+    if task_goal is not None and (type(task_goal) is not int or task_goal <= 0):
+        raise ValueError("recording_task_goal must be a positive integer")
+    if split is not None and split not in ("train", "development"):
+        raise ValueError("recording_split must be train or development")
+    if tasks is not None:
+        if (
+            not tasks
+            or not position
+            or not isinstance(position, str)
+            or any(
+                not isinstance(k, str)
+                or not k.isdecimal()
+                or not isinstance(v, str)
+                or not v.strip()
+                for k, v in tasks.items()
+            )
+        ):
+            raise ValueError(
+                "recording_tasks needs numeric choices, task text and recording_position"
+            )
     robot = official.make_robot_from_config(cfg.robot)
     teleop = official.make_teleoperator_from_config(cfg.teleop)
     _, action_processor, observation_processor = make_default_processors()
@@ -318,6 +348,13 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             encoder_threads=ds.encoder_threads,
         ),
         capture_context=dict(
+            recording=dict(
+                tasks=tasks,
+                position=position,
+                layout_description=layout_description,
+                intended_split=split,
+                task_goal=task_goal,
+            ),
             scene=asdict(cfg.robot.scene) if cfg.robot.scene else None,
             timing=asdict(cfg.robot.capture_timing) if cfg.robot.capture_timing else None,
             safety=json.loads(Path(cfg.robot.safety_path).read_text())
@@ -382,6 +419,11 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             ds,
             teleop_action_processor.steps[0].control,
             terminal=terminal,
+            tasks=tasks,
+            position=position,
+            layout_description=layout_description,
+            split=split,
+            task_goal=task_goal,
         )
         success = True
     except BaseException as exc:

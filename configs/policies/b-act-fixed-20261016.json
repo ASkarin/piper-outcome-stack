@@ -1,0 +1,60 @@
+{
+  "id": "b-act-fixed-20261016",
+  "operator_profile_key": "act_bundle",
+  "controller_bundle": "/home/fff/piper-runs/b-act-fixed-20261016",
+  "policies": {
+    "green-left": {
+      "run_id": "act-b-targeted-green-left-20261013-seed42",
+      "checkpoint_step": 5000,
+      "instruction": "把绿色方块放到左区。"
+    },
+    "blue-right": {
+      "run_id": "act-b-blue-right-correction-20261015-seed42",
+      "checkpoint_step": 5000,
+      "instruction": "把天蓝色六边形块放到右区。"
+    },
+    "blue-left": {
+      "run_id": "act-b-layout1-blue-left-20261016-seed42",
+      "checkpoint_step": 5000,
+      "instruction": "把天蓝色六边形块放到左区。"
+    },
+    "green-right": {
+      "run_id": "act-b-green-right-recollection-20261016-seed42",
+      "checkpoint_step": 5000,
+      "instruction": "把绿色方块放到右区。"
+    }
+  },
+  "execution": {
+    "control_hz": 50,
+    "n_action_steps": 1,
+    "temporal_ensemble_coeff": 0.01,
+    "duration_s": 60
+  },
+  "source_of_truth": "controller bundle freeze.json; mutable development code is not the frozen runtime",
+  "input": {
+    "rgb": "d435/observation.images.d435",
+    "shape": [
+      480,
+      640,
+      3
+    ],
+    "state_order": [
+      "joint_1.pos",
+      "joint_2.pos",
+      "joint_3.pos",
+      "joint_4.pos",
+      "joint_5.pos",
+      "joint_6.pos",
+      "gripper.pos"
+    ],
+    "units": "joint rad; total gripper opening m"
+  },
+  "output": {
+    "action_chunk": [
+      50,
+      7
+    ],
+    "execution_space": "absolute rad/m decoded at generation state before TE"
+  },
+  "scope": "Known-scene B baseline; canonical instruction-to-skill selection, no free-form language claim"
+}

@@ -150,6 +150,27 @@ def verify_telemetry(root, dataset):
             if key in rows:
                 raise RuntimeError("duplicate committed telemetry row")
             rows[key] = e
+    segment_path = Path(root) / "demonstration-segments.json"
+    if segment_path.exists():
+        from .demonstration_segments import segments_from_telemetry
+
+        recorded = json.loads(segment_path.read_text())
+        expected = segments_from_telemetry(root)
+        if any(recorded[k] != v for k, v in expected.items()):
+            raise RuntimeError("demonstration segment map differs from source telemetry")
+        if len(expected["segments"]) != dataset.num_episodes:
+            raise RuntimeError("Dataset episode count differs from continuous segments")
+        selected = {}
+        for segment in expected["segments"]:
+            for source_frame in range(segment["first_frame"], segment["end_frame_exclusive"]):
+                row = rows[segment["source_episode_index"], source_frame]
+                if (
+                    row["session"] != segment["source_session"]
+                    or row["attempt"] != segment["source_attempt"]
+                ):
+                    raise RuntimeError("segment belongs to another saved attempt")
+                selected[segment["episode_index"], source_frame - segment["first_frame"]] = row
+        rows = selected
     if len(rows) != dataset.num_frames:
         raise RuntimeError("telemetry and Dataset frame counts differ")
     depth_keys = dataset.meta.depth_keys

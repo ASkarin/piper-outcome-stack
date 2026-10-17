@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -69,6 +70,7 @@ class TeleopControl:
         self.reference_revision = 0
         self.orientation_target = None
         self._arm_input_active = False
+        self._center_run_epoch = None
         self._previous_home = None
         self._previous_work = None
         self.pose_kind = None
@@ -78,6 +80,66 @@ class TeleopControl:
         self.pose_event = None
         self.pose_cancel_reason = None
         self.hold_settings = None
+        self.precision = "normal"
+        self.protection_reason = None
+        self.protection_started_s = None
+
+    @property
+    def input_scale(self):
+        return 0.5 if self.precision == "fine" else 1.0
+
+    def select_precision(self, precision, *, hold, neutral, conflicting=False):
+        """Change joystick gain at an existing confirmed pause, without motion."""
+        if precision not in ("fine", "normal"):
+            raise ValueError("precision must be fine or normal")
+        with self._lock:
+            if (
+                hold
+                or not neutral
+                or conflicting
+                or not self.hold_confirmed
+                or self.state not in (TeleopState.WAITING, TeleopState.PAUSED, TeleopState.CENTERED)
+            ):
+                raise ValueError("请松开LB和模式/姿态按键，摇杆、扳机回中并等待保持确认")
+            if self.pending_mode is not None:
+                raise ValueError("请等待模式选择完成后再切换精细档")
+            self.precision = precision
+            self.reference_state = None
+            self.reference_revision += 1
+
+    def request_protection_hold(self, reason):
+        with self._lock:
+            self.request_hold(reason)
+            if self.protection_reason is None:
+                self.protection_started_s = time.monotonic()
+            self.protection_reason = reason
+
+    def complete_protection_recovery(self):
+        """Clear the wait only after a new allowed SDK command succeeds."""
+        with self._lock:
+            if self.state in (
+                TeleopState.RUNNING,
+                TeleopState.CENTERING,
+                TeleopState.CENTERED,
+                TeleopState.POSE_MOVING,
+            ):
+                self.protection_reason = None
+                self.protection_started_s = None
+
+    def demonstration_snapshot(self):
+        with self._lock:
+            # Use the existing permission state: it also catches shoulder release
+            # serviced during camera waits before the next ordinary input tick.
+            operator_pause = self.recording_phase == "recording" and self.state not in (
+                TeleopState.RUNNING,
+                TeleopState.CENTERING,
+                TeleopState.CENTERED,
+            )
+            return {
+                "manual": operator_pause,
+                "protection_reason": self.protection_reason,
+                "protection_started_s": self.protection_started_s,
+            }
 
     def prepare_enable(self):
         """Invalidate prior input after an explicit servo lifecycle operation."""
@@ -107,6 +169,7 @@ class TeleopControl:
             self.mode_event = None
             self.orientation_target = None
             self._arm_input_active = False
+            self._center_run_epoch = None
 
     def observe(
         self,
@@ -119,6 +182,8 @@ class TeleopControl:
     ) -> tuple[str, int]:
         with self._lock:
             self.mode_event = None
+            if mode_switch or home or work or translation_switch:
+                self._center_run_epoch = None
             if self.state in (TeleopState.FAULT, TeleopState.E_STOP):
                 return "wait", self.epoch
             if self.pending_mode is not None and (
@@ -434,6 +499,7 @@ class TeleopControl:
 
     def reset_reference(self):
         with self._lock:
+            self._center_run_epoch = None
             self.reference_state = None
             self.reference_revision += 1
             self.gripper_reference_state = None
@@ -513,11 +579,13 @@ class TeleopControl:
                 TeleopState.CENTERED,
             ):
                 return "hold", self.epoch
-            if self.state is TeleopState.CENTERING:
+            if self.state is TeleopState.CENTERING and (
+                not moving or self._center_run_epoch is None or self.protection_reason is not None
+            ):
                 return "center", self.epoch
             if moving:
-                if self.state is TeleopState.CENTERED:
-                    if not self.hold_confirmed:
+                if self.state in (TeleopState.CENTERING, TeleopState.CENTERED):
+                    if self.state is TeleopState.CENTERED and not self.hold_confirmed:
                         return "center", self.epoch
                     self.epoch += 1
                     self.state = TeleopState.RUNNING
@@ -526,7 +594,11 @@ class TeleopControl:
                 self._arm_input_active = True
                 return "run", self.epoch
             if self._arm_input_active:
+                self._center_run_epoch = self.epoch
                 self.epoch += 1
+                self.reference_state = None
+                self.reference_revision += 1
+                self.orientation_target = None
                 self.hold_confirmed = False
                 self.state = TeleopState.CENTERING
                 logging.info("[摇杆回中] 正在保持位置…")
@@ -535,8 +607,25 @@ class TeleopControl:
             self._arm_input_active = False
             return "center", self.epoch
 
+    def consume_center_resume(self, epoch, running_epoch):
+        """Continue only the same LB permission already admitted by the robot."""
+        with self._lock:
+            if (
+                self.state is not TeleopState.RUNNING
+                or epoch != self.epoch
+                or not self._previous_hold
+                or self._center_run_epoch is None
+                or self._center_run_epoch != running_epoch
+                or self.protection_reason is not None
+                or self.mode_event is not None
+            ):
+                return False
+            self._center_run_epoch = None
+            return True
+
     def reconfirm_hold(self):
         with self._lock:
+            self._center_run_epoch = None
             if self.state is TeleopState.CENTERED:
                 self.epoch += 1
                 self.hold_confirmed = False
@@ -546,6 +635,7 @@ class TeleopControl:
 
     def request_hold(self, reason=None):
         with self._lock:
+            self._center_run_epoch = None
             self._cancel_pending_mode(reason or "hold requested")
             if self.state in (TeleopState.FAULT, TeleopState.E_STOP):
                 return
@@ -569,6 +659,7 @@ class TeleopControl:
 
     def confirm_hold(self, orientation=None):
         with self._lock:
+            self._center_run_epoch = None
             if self.state in (TeleopState.FAULT, TeleopState.E_STOP):
                 return
             if orientation is not None:
@@ -584,6 +675,7 @@ class TeleopControl:
 
     def stop(self, emergency: bool):
         with self._lock:
+            self._center_run_epoch = None
             self.pending_mode = None
             self._pending_mode_phase = None
             if self.state is TeleopState.E_STOP and not emergency:

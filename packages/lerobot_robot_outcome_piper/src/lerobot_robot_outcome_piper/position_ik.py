@@ -30,10 +30,17 @@ def solve_position(seed, feedback, target, safety, gripper, target_gripper, *, t
             and np.all(q >= lower)
             and np.all(q <= upper)
             and np.linalg.norm(residual(q)) <= 1e-5
-            and workspace_pose_allowed(
-                current_pose, pose(q), gripper, target_gripper, safety, allow_reentry=True
-            )
         )
+
+    def check_workspace(q):
+        if not workspace_pose_allowed(
+            current_pose, pose(q), gripper, target_gripper, safety, allow_reentry=True
+        ):
+            # A converged pose beyond the boundary is an input rejection, not
+            # another IK problem. The processor keeps the existing hold path.
+            raise OutcomePiperIntentRejected(
+                "工具目标越过工作区/桌面边界，保持当前位置；回中后向区域内移动"
+            )
 
     # Only the seed may be projected into the search bounds; no output is clipped.
     initial = np.clip(seed, lower, upper)
@@ -52,6 +59,7 @@ def solve_position(seed, feedback, target, safety, gripper, target_gripper, *, t
         )
         q = expand(fixed.x)
         if fixed.success and valid(q):
+            check_workspace(q)
             level = "fixed_wrist"
         else:
             fixed = None
@@ -76,15 +84,19 @@ def solve_position(seed, feedback, target, safety, gripper, target_gripper, *, t
             raise OutcomePiperIntentRejected(
                 "grasp-center position unreachable within joint/step/workspace constraints"
             )
+        check_workspace(q)
         level = "weighted_wrist"
     # Position Jacobian diagnostics are not the six-dimensional orientation gate.
     h = 1e-6
-    jac = np.column_stack([(residual(q + np.eye(6)[i] * h) - residual(q)) / h for i in range(6)])
+    error = residual(q)
+    jac = np.column_stack([(residual(q + direction) - error) / h for direction in np.eye(6) * h])
     detail = dict(
         level=level,
-        position_error_m=float(np.linalg.norm(residual(q))),
+        position_error_m=float(np.linalg.norm(error)),
         position_sigma_min=float(np.linalg.svd(jac, compute_uv=False)[-1]),
         wrist_delta_rad=(q[3:] - seed[3:]).tolist(),
         solve_duration_s=time.monotonic() - started,
     )
+    if time.monotonic() - started >= timeout:
+        raise OutcomePiperControlTimeout("position IK exceeded shared time budget")
     return q.tolist(), detail

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+import torch
 from torch.nn import functional as F
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies.act.configuration_act import ACTConfig
@@ -31,6 +32,14 @@ def parameterize(actions, state, cfg):
     out = actions.clone()
     out[..., 6] = (width - anchor - cfg.gripper_action_mean) / cfg.gripper_action_std
     return out
+
+
+def inverse_positive_width(width, cfg):
+    """Unconstrained width in metres for valid labels, before normalization."""
+    positive = (width - cfg.positive_floor_m) / cfg.positive_scale_m
+    if not torch.isfinite(positive).all() or torch.any(positive <= 0):
+        raise ValueError("teacher widths must be finite and exceed the checkpoint positivity floor")
+    return cfg.positive_scale_m * (positive + torch.log(-torch.expm1(-positive)))
 
 
 class PositiveACT(ACT):

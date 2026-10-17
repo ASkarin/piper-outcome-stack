@@ -41,6 +41,11 @@ def main():
         help="record existing policy RGB inputs at up to10Hz in a bounded background writer",
     )
     parser.add_argument(
+        "--record-action-chunks",
+        action="store_true",
+        help="save each newly generated absolute chunk with its anchor and execution index",
+    )
+    parser.add_argument(
         "--n-action-steps",
         type=int,
         default=1,
@@ -59,6 +64,9 @@ def main():
         "--duration-s",
         type=float,
         help="optional duration budget; omitted means run until operator cancels",
+    )
+    parser.add_argument(
+        "--completion-config", type=Path, help="fixed-scene placement detector configuration"
     )
     args = parser.parse_args()
     if args.duration_s is not None and (not math.isfinite(args.duration_s) or args.duration_s <= 0):
@@ -85,10 +93,21 @@ def main():
     if robot_cfg.capture_timing is None:
         raise ValueError("trial requires measured capture timing")
     safety = load_motion_safety(robot_cfg.safety_path)
+    completion_detector = None
+    completion_config = None
+    if args.completion_config is not None:
+        from piper_outcome_stack.policy_completion import PlacementCompletion
+
+        completion_config = json.loads(args.completion_config.read_text())
+        if completion_config["scene_id"] != config["robot"]["scene"]["scene_id"]:
+            raise ValueError("completion region belongs to a different scene")
+        completion_detector = PlacementCompletion(completion_config)
     with args.output.open("x") as output:
         report = dict(
             status="started",
             mode=args.mode,
+            record_action_chunks=args.record_action_chunks,
+            completion_config=completion_config,
             config=config,
             safety=asdict(safety),
             checkpoint=str(args.checkpoint),
@@ -210,6 +229,8 @@ def main():
                             max_actions=report["max_policy_actions"],
                             max_run_s=report["max_run_s"],
                             frame_recorder=recorder,
+                            record_action_chunks=args.record_action_chunks,
+                            completion_detector=completion_detector,
                         )
                     )
                 except (Exception, KeyboardInterrupt) as exc:

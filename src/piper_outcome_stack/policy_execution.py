@@ -49,7 +49,15 @@ def check_policy_observation(telemetry, timing, now):
     return age
 
 
-def predict_candidate(predictor, observation, telemetry, timing, safety, clock=time.monotonic):
+def predict_candidate(
+    predictor,
+    observation,
+    telemetry,
+    timing,
+    safety,
+    clock=time.monotonic,
+    record_action_chunk=False,
+):
     """One observation → absolute chunk → optional TE → checked target; sends nothing."""
     from lerobot_robot_outcome_piper.safety import ACTION_KEYS
     from lerobot_robot_outcome_piper.execution_constraints import check_execution_target
@@ -64,16 +72,30 @@ def predict_candidate(predictor, observation, telemetry, timing, safety, clock=t
     )
     predicted = clock()
     target = predictor.select_target(chunk, chunk_index=chunk_index, new_chunk=inferred)
+    recorded_prediction = {}
+    if record_action_chunk:
+        recorded_prediction = dict(
+            generation_observation_sequence=predictor.generation_sequence,
+            anchor=list(predictor.generation_state),
+            candidate_chunk_index=chunk_index,
+            inference_performed=inferred,
+            selected_target_rad_m=target.tolist(),
+        )
+        if inferred:
+            recorded_prediction["absolute_action_chunk_rad_m"] = chunk.tolist()
     try:
         check_execution_target(state, target, safety)
     except ValueError as exc:
-        raise ValueError(
-            f"{exc}; observed_rad_m={state}; candidate_rad_m={target.tolist()}"
-        ) from exc
+        error = ValueError(f"{exc}; observed_rad_m={state}; candidate_rad_m={target.tolist()}")
+        if record_action_chunk:
+            error.policy_prediction = recorded_prediction
+        raise error from exc
     checked = clock()
     try:
         age = check_policy_observation(telemetry, timing, checked)
     except ValueError as exc:
+        if record_action_chunk:
+            exc.policy_prediction = recorded_prediction
         exc.policy_timing = {
             "input_age_before_prediction_s": started - telemetry["oldest_received_monotonic_s"],
             "inference_s": predicted - started,
@@ -83,6 +105,7 @@ def predict_candidate(predictor, observation, telemetry, timing, safety, clock=t
         }
         raise
     return dict(zip(ACTION_KEYS, map(float, target))), {
+        **recorded_prediction,
         "observation_sequence": telemetry["sequence"],
         "anchor": predictor.generation_state,
         "generation_observation_sequence": predictor.generation_sequence,
