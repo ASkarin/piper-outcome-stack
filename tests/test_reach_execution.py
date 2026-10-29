@@ -162,3 +162,73 @@ def test_check_mode_does_not_construct_or_run_a_robot(tmp_path, monkeypatch):
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("failure", [None, "robot", "teleop"])
+def test_operator_entry_cleanup_reports_errors_and_keeps_last_dispatch(
+    bundle, tmp_path, monkeypatch, failure
+):
+    from contextlib import nullcontext
+    import builtins
+    import lerobot_robot_outcome_piper as plugin
+    from lerobot_robot_outcome_piper.robot import PiperState
+    from test_policy_motion import Input
+
+    class Robot:
+        state = PiperState.DISCONNECTED
+        stop_outcome = "hold_confirmed"
+        stop_error = None
+        last_action_telemetry = {"result": "sdk_returned", "commands": ["synthetic"]}
+
+        def configure_teleoperation(self, *args):
+            pass
+
+        def connect(self):
+            self.state = PiperState.ACTIVE
+
+        def enable(self):
+            pass
+
+        def disconnect(self):
+            if failure == "robot":
+                raise RuntimeError("robot cleanup failed")
+
+        def request_input_fault(self, exc):
+            self.state = PiperState.FAULT
+
+    class Teleop(Input):
+        def connect(self):
+            pass
+
+        def poll_emergency_stop(self):
+            return False
+
+        def disconnect(self):
+            if failure == "teleop":
+                raise RuntimeError("teleop cleanup failed")
+
+    monkeypatch.setattr(plugin, "OutcomePiper", lambda config: Robot())
+    monkeypatch.setattr(plugin, "OutcomePiperXbox", lambda config: Teleop())
+    monkeypatch.setattr(
+        reach_trial,
+        "load_configuration",
+        lambda path: ({}, NS(), NS(hold_settings=lambda: NS()), NS(motion_speed_percent=5)),
+    )
+    monkeypatch.setattr(reach_trial, "asdict", lambda value: {})
+    monkeypatch.setattr(builtins, "input", lambda prompt: "")
+    monkeypatch.setattr(
+        "lerobot_robot_outcome_piper.input_safety.motion_input_safety_scope", nullcontext
+    )
+    monkeypatch.setattr(
+        "piper_outcome_stack.policy_motion.run_policy_trial",
+        lambda *a, **kw: dict(status="segment_ended_held", hold_confirmed=True),
+    )
+    output = tmp_path / "run.json"
+    if failure:
+        with pytest.raises(RuntimeError, match="cleanup failed"):
+            reach_trial.run_leg(bundle, "current.json", "evaluation-00", "out", "grid", 1, output)
+    else:
+        reach_trial.run_leg(bundle, "current.json", "evaluation-00", "out", "grid", 1, output)
+    result = json.loads(output.read_text())
+    assert result["last_action_telemetry"] == Robot.last_action_telemetry
+    assert result["status"] == ("failed" if failure else "segment_ended_held")

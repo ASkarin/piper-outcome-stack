@@ -227,11 +227,21 @@ def run_leg(bundle, config_path, case, direction, method, duration, output):
                     try:
                         robot.disconnect()
                     finally:
-                        report.update(stop_outcome=robot.stop_outcome, stop_error=robot.stop_error)
+                        report.update(
+                            stop_outcome=robot.stop_outcome,
+                            stop_error=robot.stop_error,
+                            last_action_telemetry=robot.last_action_telemetry,
+                        )
+            except Exception as exc:
+                report.update(status="failed", disconnect_error=str(exc))
+                raise
             finally:
                 try:
                     if teleop is not None:
                         teleop.disconnect()
+                except Exception as exc:
+                    report.update(status="failed", teleop_disconnect_error=str(exc))
+                    raise
                 finally:
                     json.dump(report, stream, indent=2, ensure_ascii=False)
                     stream.write("\n")
