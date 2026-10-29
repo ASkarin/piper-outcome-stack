@@ -60,7 +60,12 @@ def test_expiration_during_inference_rejects_before_return(monkeypatch):
         predict_candidate(
             predictor(),
             observation(),
-            dict(quality="checked", oldest_received_monotonic_s=1.0, sequence=1),
+            dict(
+                quality="checked",
+                oldest_received_monotonic_s=1.0,
+                observed_monotonic_s=1.0,
+                sequence=1,
+            ),
             NS(observation_max_age_s=0.1),
             None,
             lambda: next(clock),
@@ -84,7 +89,12 @@ def test_limits_rejection_propagates_without_clipping(monkeypatch):
         predict_candidate(
             predictor(),
             observation(),
-            dict(quality="checked", oldest_received_monotonic_s=1.0, sequence=1),
+            dict(
+                quality="checked",
+                oldest_received_monotonic_s=1.0,
+                observed_monotonic_s=1.0,
+                sequence=1,
+            ),
             NS(observation_max_age_s=0.1),
             None,
             lambda: 1.0,
@@ -107,6 +117,7 @@ def test_shadow_uses_fresh_observations_and_never_dispatches(monkeypatch):
                 quality="checked",
                 oldest_received_monotonic_s=1.0,
                 sequence=self.count,
+                observed_monotonic_s=1.0,
             )
             return observation()
 
@@ -164,3 +175,38 @@ def test_reference_inputs_reject_mismatch_and_empty(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError, match="non-empty"):
         verify_reference_inputs(p, empty, None)
+
+
+def test_smolvla_zero_projection_is_logged_before_existing_target_checks(monkeypatch):
+    from piper_policy.smolvla_execution import AsyncSmolVLAExecutor
+
+    raw = np.zeros((50, 7), np.float32)
+    raw[:, 6] = -0.00017
+    ex = AsyncSmolVLAExecutor.__new__(AsyncSmolVLAExecutor)
+    ex.timeline = NS(active=None)
+    ex.execution_details = {"phase": "policy"}
+    ex.generation_state = [0.0] * 7
+    ex.generation_sequence = 1
+    ex.n_action_steps = 25
+    ex.execution_chunk = lambda *args, **kwargs: (raw, 0, True)
+    seen = []
+    monkeypatch.setattr(
+        "lerobot_robot_outcome_piper.execution_constraints.check_execution_target",
+        lambda state, target, safety: seen.append(target.copy()),
+    )
+    target, report = predict_candidate(
+        ex,
+        observation(),
+        dict(
+            quality="checked", oldest_received_monotonic_s=1.0, observed_monotonic_s=1.0, sequence=1
+        ),
+        NS(observation_max_age_s=0.1),
+        None,
+        lambda: 1.0,
+        True,
+    )
+    assert target["gripper.pos"] == 0 and seen[0][6] == 0
+    assert report["absolute_action_chunk_rad_m"][0][6] < 0
+    assert report["asynchronous_execution"]["raw_target_rad_m"][6] < 0
+    assert report["asynchronous_execution"]["gripper_projection"] == "zero"
+    assert report["selected_target_rad_m"][6] == 0

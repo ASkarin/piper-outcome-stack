@@ -1,0 +1,96 @@
+{
+  "id": "smolvla-50k-rtc-20261027",
+  "controller_root": "/home/fff/piper-runs/smolvla-50k-rtc-20261027",
+  "controller_base": "/home/fff/piper-runs/smolvla-two-candidates-20261022",
+  "training_stage": "/workspace/piper/staging/csm/smolvla-retrain-20261027",
+  "models": {
+    "original": {
+      "run_id": "smolvla-b-original-fresh-20261027-seed42",
+      "source_checkpoint": "/workspace/piper/runs/csm/smolvla-b-original-fresh-20261027-seed42/checkpoints-output/checkpoints/050000/pretrained_model",
+      "files": [
+        {
+          "name": "config.json",
+          "bytes": 2190
+        },
+        {
+          "name": "model.safetensors",
+          "bytes": 1197789224
+        },
+        {
+          "name": "policy_postprocessor.json",
+          "bytes": 660
+        },
+        {
+          "name": "policy_postprocessor_step_0_unnormalizer_processor.safetensors",
+          "bytes": 5632
+        },
+        {
+          "name": "policy_preprocessor.json",
+          "bytes": 1558
+        },
+        {
+          "name": "policy_preprocessor_step_5_normalizer_processor.safetensors",
+          "bytes": 5632
+        },
+        {
+          "name": "train_config.json",
+          "bytes": 6936
+        }
+      ]
+    },
+    "flat": {
+      "run_id": "smolvla-b-flat-fresh-20261027-seed42",
+      "source_checkpoint": "/workspace/piper/runs/csm/smolvla-b-flat-fresh-20261027-seed42/checkpoints-output/checkpoints/050000/pretrained_model",
+      "files": [
+        {
+          "name": "config.json",
+          "bytes": 2190
+        },
+        {
+          "name": "model.safetensors",
+          "bytes": 1197789224
+        },
+        {
+          "name": "policy_postprocessor.json",
+          "bytes": 660
+        },
+        {
+          "name": "policy_postprocessor_step_0_unnormalizer_processor.safetensors",
+          "bytes": 5632
+        },
+        {
+          "name": "policy_preprocessor.json",
+          "bytes": 1558
+        },
+        {
+          "name": "policy_preprocessor_step_5_normalizer_processor.safetensors",
+          "bytes": 5632
+        },
+        {
+          "name": "train_config.json",
+          "bytes": 6928
+        }
+      ]
+    }
+  },
+  "tasks": {
+    "green-left": "把绿色方块放到左区。",
+    "green-right": "把绿色方块放到右区。",
+    "blue-left": "把天蓝色六边形块放到左区。",
+    "blue-right": "把天蓝色六边形块放到右区。"
+  },
+  "runtime": {
+    "rtc": true,
+    "guidance": "native_joint6",
+    "denoising_steps": 10,
+    "request_stride": 25,
+    "initial_delay_ticks": 20,
+    "control_hz": 50,
+    "lowpass": false,
+    "gripper_projection": "zero",
+    "gripper_reference": "existing measured configuration",
+    "action_padding": "t*initial_noise for25structural dimensions",
+    "max_trial_seconds": 60
+  },
+  "authorization": "2026-10-27 user requested preparation of real-robot tests with RTC; operator starts hardware/motion, assistant performs device-free preparation"
+}

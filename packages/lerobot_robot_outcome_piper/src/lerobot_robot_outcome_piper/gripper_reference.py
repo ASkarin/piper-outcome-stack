@@ -1,4 +1,4 @@
-"""Time-based Xbox gripper reference; no hardware or committed state here."""
+"""Time-based gripper candidates for Xbox and policy control; dispatch owns commit."""
 
 from dataclasses import dataclass
 import math
@@ -68,3 +68,21 @@ def gripper_candidate(previous, target, feedback, command, settings, now, lower,
         requested_target_m=requested,
         travel_limited=limited,
     )
+
+
+def gripper_position_candidate(previous, target, feedback, goal, settings, now, lower, upper):
+    """Approach a policy position from the last dispatched target; commit elsewhere."""
+    if not math.isfinite(goal) or not lower <= goal <= upper:
+        raise ValueError("requested gripper goal is outside the existing command range")
+    command = max(-1.0, min(1.0, (goal - target) / (settings.max_speed_m_s * settings.period_s)))
+    reference = gripper_candidate(
+        previous,
+        target,
+        feedback,
+        command,
+        settings,
+        now,
+        max(lower, min(target, goal)),
+        min(upper, max(target, goal)),
+    )
+    return {**reference, "raw_goal_m": goal, "feedback_m": feedback, "speed_command": command}

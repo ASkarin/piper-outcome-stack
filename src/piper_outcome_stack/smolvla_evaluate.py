@@ -8,8 +8,8 @@ import time
 import numpy as np
 import torch
 
-from piper_policy.smolvla import IMAGE_FEATURE, TASK_A, SmolVLAChunkPredictor
-from .smolvla_training import make_views, write_json
+from piper_policy.smolvla import IMAGE_FEATURE, SmolVLAChunkPredictor
+from .smolvla_training import make_views, validate_task, write_json
 
 
 def action_errors(predictions, targets, valid):
@@ -49,6 +49,49 @@ def command_envelope_counts(states, predictions, limits):
     }
 
 
+def grouped_errors(predictions, targets, valid, provenance):
+    """Report each original demonstration once, then macro-average within task/layout."""
+    groups = {}
+    for index, row in enumerate(provenance):
+        lineage = row["lineage"]
+        key = (
+            lineage["source_session"],
+            lineage["source_episode"],
+            row["task"],
+            lineage["layout"],
+        )
+        groups.setdefault(key, []).append(index)
+    sources = []
+    for (session, episode, task, layout), ids in groups.items():
+        sources.append(
+            {
+                "source_session": session,
+                "source_episode": episode,
+                "task": task,
+                "layout": layout,
+                **action_errors(predictions[ids], targets[ids], valid[ids]),
+            }
+        )
+    macro = []
+    metrics = (
+        "first_joint_mae_deg",
+        "first_gripper_mae_mm",
+        "chunk_joint_mae_deg",
+        "chunk_gripper_mae_mm",
+    )
+    for task, layout in sorted({(r["task"], r["layout"]) for r in sources}):
+        rows = [r for r in sources if (r["task"], r["layout"]) == (task, layout)]
+        macro.append(
+            {
+                "task": task,
+                "layout": layout,
+                "demonstrations": len(rows),
+                **{k: np.asarray([r[k] for r in rows]).mean(axis=0).tolist() for k in metrics},
+            }
+        )
+    return {"per_source": sources, "macro_task_layout": macro}
+
+
 def evaluate(spec, checkpoint, output, policy_type):
     output.mkdir(parents=True, exist_ok=False)
     result = {
@@ -65,8 +108,10 @@ def evaluate(spec, checkpoint, output, policy_type):
         torch.set_num_threads(4)
         _, development = make_views(spec)
         indices = development.evaluation_indices(spec["evaluation"]["samples_per_episode"])
+        first = development[indices[0]]
+        first_task = validate_task(spec, first["task"])
         if policy_type == "smolvla":
-            predictor = SmolVLAChunkPredictor.from_checkpoint(checkpoint, task=TASK_A)
+            predictor = SmolVLAChunkPredictor.from_checkpoint(checkpoint, task=first_task)
         else:
             from piper_policy.policy_execution import ACTChunkPredictor
 
@@ -82,8 +127,9 @@ def evaluate(spec, checkpoint, output, policy_type):
             item = development[index]
             rgb = item[IMAGE_FEATURE].permute(1, 2, 0).numpy()
             state = item["observation.state"].numpy()
-            if item["task"] != TASK_A:
-                raise ValueError("development task differs from the frozen A instruction")
+            task = validate_task(spec, item["task"])
+            if policy_type == "smolvla":
+                predictor.task = task
             torch.manual_seed(spec["optimization"]["seed"] + index)
             torch.cuda.synchronize()
             before = time.perf_counter()
@@ -100,6 +146,7 @@ def evaluate(spec, checkpoint, output, policy_type):
             local = index - (development.part_ends[part - 1] if part else 0)
             provenance.append(
                 {
+                    "task": task,
                     "retained_index": index,
                     "episode": episode,
                     "source_frame_index": int(development.parts[part][1][local]),
@@ -117,6 +164,8 @@ def evaluate(spec, checkpoint, output, policy_type):
                 {"episode": episode, **action_errors(predictions[mask], targets[mask], valid[mask])}
             )
         hold = np.repeat(states[:, None, :], predictions.shape[1], axis=1)
+        if "tasks" in spec["input_contract"]:
+            result["grouped_metrics"] = grouped_errors(predictions, targets, valid, provenance)
         result.update(
             status="complete",
             metrics=action_errors(predictions, targets, valid),

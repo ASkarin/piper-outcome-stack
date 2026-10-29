@@ -32,6 +32,31 @@ def retained_indices(episodes, source_starts, source_ends):
     return np.asarray(indices), starts, ends, lineage
 
 
+def segmented_indices(segments, source_starts, source_ends):
+    """Keep explicit continuous intervals as separate future-action horizons."""
+    indices, starts, ends, lineage = [], [], [], []
+    used = set()
+    for row in segments:
+        episode = row["dataset_episode"]
+        if not 0 <= episode < len(source_starts):
+            raise ValueError("segment episode is outside source dataset")
+        begin, end = row["first_frame"], row["end_frame_exclusive"]
+        length = source_ends[episode] - source_starts[episode]
+        if not 0 <= begin < end <= length:
+            raise ValueError("segment interval is outside source episode")
+        ids = range(source_starts[episode] + begin, source_starts[episode] + end)
+        if used.intersection(ids):
+            raise ValueError("source segments overlap")
+        used.update(ids)
+        starts.append(len(indices))
+        indices.extend(ids)
+        ends.append(len(indices))
+        lineage.append(dict(row["provenance"]))
+    if not indices:
+        raise ValueError("source segments are empty")
+    return np.asarray(indices), starts, ends, lineage
+
+
 class RetainedDataset(Dataset):
     """Concatenate frozen source views; future actions stop at each episode boundary."""
 
@@ -51,17 +76,29 @@ class RetainedDataset(Dataset):
             base = LeRobotDataset(
                 source["repo_id"], root=root, video_backend="pyav", return_uint8=True
             )
-            mapping = json.loads(Path(source["frame_map"]).read_text())
-            rows = [
-                row
-                for row in mapping["episodes"]
-                if row["provenance"]["split"] == source["map_split"]
-            ]
-            ids, starts, ends, lineage = retained_indices(
-                rows,
-                list(base.meta.episodes["dataset_from_index"]),
-                list(base.meta.episodes["dataset_to_index"]),
-            )
+            if "segments" in source:
+                ids, starts, ends, lineage = segmented_indices(
+                    source["segments"],
+                    list(base.meta.episodes["dataset_from_index"]),
+                    list(base.meta.episodes["dataset_to_index"]),
+                )
+                for row in source["segments"]:
+                    if base.meta.episodes["tasks"][row["dataset_episode"]] != [
+                        row["provenance"]["task"]
+                    ]:
+                        raise ValueError("segment task differs from source dataset")
+            else:
+                mapping = json.loads(Path(source["frame_map"]).read_text())
+                rows = [
+                    row
+                    for row in mapping["episodes"]
+                    if row["provenance"]["split"] == source["map_split"]
+                ]
+                ids, starts, ends, lineage = retained_indices(
+                    rows,
+                    list(base.meta.episodes["dataset_from_index"]),
+                    list(base.meta.episodes["dataset_to_index"]),
+                )
             table = pd.concat(
                 [
                     pd.read_parquet(path, columns=["index", "observation.state", "action"])
@@ -97,6 +134,12 @@ class RetainedDataset(Dataset):
         self.meta.info.total_frames = self.num_frames
         self.meta.info.total_episodes = self.num_episodes
         self.meta.repo_id = repo_id
+        tasks = sorted({task for base, _ in self.parts for task in base.meta.tasks.index})
+        self.task_to_index = {task: index for index, task in enumerate(tasks)}
+        self.meta.info.total_tasks = len(tasks)
+        self.meta.tasks = pd.DataFrame(
+            {"task_index": list(range(len(tasks)))}, index=pd.Index(tasks, name="task")
+        )
         self.meta.episodes = {
             "dataset_from_index": self.starts,
             "dataset_to_index": self.ends,
@@ -117,6 +160,10 @@ class RetainedDataset(Dataset):
         local = index - (self.part_ends[part - 1] if part else 0)
         base, ids = self.parts[part]
         item = dict(base[int(ids[local])])
+        if "task" in item:
+            item["task_index"] = torch.full_like(
+                item["task_index"], self.task_to_index[item["task"]]
+            )
         episode = int(np.searchsorted(self.ends, index, side="right"))
         future = np.arange(index, index + self.chunk_size)
         end = self.ends[episode]

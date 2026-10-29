@@ -8,6 +8,7 @@ from piper_outcome_stack.retained_dataset import (
     RetainedDataset,
     retained_indices,
     require_disjoint_sessions,
+    segmented_indices,
 )
 
 
@@ -56,3 +57,29 @@ def test_source_session_overlap_is_rejected():
     require_disjoint_sessions(a, b)
     with pytest.raises(ValueError, match="overlap"):
         require_disjoint_sessions(a, a)
+
+
+def test_segment_gaps_form_separate_horizons_and_overlap_is_rejected():
+    rows = [
+        {
+            "dataset_episode": 0,
+            "first_frame": 0,
+            "end_frame_exclusive": 2,
+            "provenance": {"source_session": "train", "source_episode": 0},
+        },
+        {
+            "dataset_episode": 0,
+            "first_frame": 4,
+            "end_frame_exclusive": 6,
+            "provenance": {"source_session": "train", "source_episode": 0},
+        },
+    ]
+    ids, starts, ends, lineage = segmented_indices(rows, [10], [16])
+    assert ids.tolist() == [10, 11, 14, 15]
+    assert starts == [0, 2] and ends == [2, 4]
+    assert lineage[0] == lineage[1]
+    with pytest.raises(ValueError, match="overlap"):
+        segmented_indices(rows + rows[:1], [10], [16])
+    rows[1]["end_frame_exclusive"] = 7
+    with pytest.raises(ValueError, match="outside"):
+        segmented_indices(rows, [10], [16])

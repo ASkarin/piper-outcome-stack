@@ -3,6 +3,7 @@
 import math
 import time
 import numpy as np
+import torch
 from piper_policy import policy_execution as policy_contract
 
 
@@ -16,10 +17,13 @@ def verify_reference_inputs(predictor, path, safety, *, warmup=30):
     with np.load(path) as data:
         images, states = data["images"], data["states"]
         expected = data["expected_absolute_chunks"]
+        seeds = data["seeds"] if "seeds" in data else None
     if len(states) == 0 or len(images) != len(states) or len(expected) != len(states):
         raise ValueError("reference inputs need matching, non-empty images/states/chunks")
     rows = []
     for i in range(len(states)):
+        if seeds is not None:
+            torch.manual_seed(int(seeds[i]))
         chunk = predictor.predict(images[i], states[i])
         delta = np.abs(chunk - expected[i])
         joint, grip = float(delta[:, :6].max()), float(delta[:, 6].max())
@@ -49,6 +53,32 @@ def check_policy_observation(telemetry, timing, now):
     return age
 
 
+def plan_policy_gripper(goal, feedback, control, epoch, settings, safety, now):
+    """Prepare the existing dispatch plan without advancing accepted reference state."""
+    from lerobot_robot_outcome_piper.gripper_reference import gripper_position_candidate
+
+    previous, revision = control.gripper_reference_snapshot(epoch)
+    target = control.gripper_target
+    if target is None:
+        target = feedback
+    reference = gripper_position_candidate(
+        previous,
+        target,
+        feedback,
+        goal,
+        settings,
+        now,
+        safety.gripper_lower,
+        safety.gripper_upper,
+    )
+    return dict(
+        feedback_m=feedback,
+        target_m=reference["target_m"],
+        base_revision=revision,
+        reference=reference,
+    )
+
+
 def predict_candidate(
     predictor,
     observation,
@@ -57,6 +87,10 @@ def predict_candidate(
     safety,
     clock=time.monotonic,
     record_action_chunk=False,
+    *,
+    control=None,
+    epoch=None,
+    gripper_reference_settings=None,
 ):
     """One observation → absolute chunk → optional TE → checked target; sends nothing."""
     from lerobot_robot_outcome_piper.safety import ACTION_KEYS
@@ -69,6 +103,7 @@ def predict_candidate(
         observation[policy_contract.POLICY_CAMERA],
         state,
         telemetry["sequence"],
+        observed_monotonic_s=telemetry["observed_monotonic_s"],
     )
     predicted = clock()
     target = predictor.select_target(chunk, chunk_index=chunk_index, new_chunk=inferred)
@@ -80,21 +115,55 @@ def predict_candidate(
             candidate_chunk_index=chunk_index,
             inference_performed=inferred,
             selected_target_rad_m=target.tolist(),
+            asynchronous_execution=getattr(predictor, "execution_details", None),
         )
         if inferred:
             recorded_prediction["absolute_action_chunk_rad_m"] = chunk.tolist()
     try:
-        check_execution_target(state, target, safety)
+        if gripper_reference_settings is not None:
+            recorded_prediction["policy_goal_rad_m"] = target.tolist()
+            if control is None or epoch is None:
+                raise ValueError("policy gripper reference needs the current control epoch")
+            goal = float(target[6])
+            if (
+                getattr(predictor, "execution_details", {}).get("phase") == "initial_hold"
+                and control.gripper_target is not None
+            ):
+                goal = control.gripper_target
+            gripper_plan = plan_policy_gripper(
+                goal,
+                state[6],
+                control,
+                epoch,
+                gripper_reference_settings,
+                safety,
+                predicted,
+            )
+            target = np.asarray(target, dtype=np.float64).copy()
+            target[6] = gripper_plan["target_m"]
+            recorded_prediction.update(
+                gripper_plan=gripper_plan,
+                selected_target_rad_m=target.tolist(),
+            )
+        if control is None:
+            check_execution_target(state, target, safety)
+        else:
+            check_execution_target(
+                state,
+                target,
+                safety,
+                last_gripper_target=control.gripper_target,
+            )
     except ValueError as exc:
         error = ValueError(f"{exc}; observed_rad_m={state}; candidate_rad_m={target.tolist()}")
-        if record_action_chunk:
+        if recorded_prediction:
             error.policy_prediction = recorded_prediction
         raise error from exc
     checked = clock()
     try:
         age = check_policy_observation(telemetry, timing, checked)
     except ValueError as exc:
-        if record_action_chunk:
+        if recorded_prediction:
             exc.policy_prediction = recorded_prediction
         exc.policy_timing = {
             "input_age_before_prediction_s": started - telemetry["oldest_received_monotonic_s"],
@@ -120,6 +189,7 @@ def predict_candidate(
         "temporal_ensemble_contributors": predictor.last_contributors
         if predictor.temporal_ensembler is not None
         else 1,
+        "asynchronous_execution": getattr(predictor, "execution_details", None),
     }
 
 

@@ -1,4 +1,4 @@
-"""Fixed-scene green-block placement candidate; separate from operator outcome labels."""
+"""Fixed-scene block placement candidate; separate from operator outcome labels."""
 
 from collections import deque
 import math
@@ -16,6 +16,21 @@ def locate_green_block(image):
     mask = (
         (green - red > 12) & (green - blue > 8) & (green > 1.08 * red) & (green > 1.03 * blue)
     ).astype(np.uint8)
+    return _largest_component(mask)
+
+
+def locate_blue_block(image):
+    if image.shape != (480, 640, 3) or image.dtype != np.uint8:
+        raise ValueError("completion requires the configured 640x480 RGB uint8 image")
+    a = image[::2, ::2].astype(np.int16)
+    red, green, blue = a[:, :, 0], a[:, :, 1], a[:, :, 2]
+    mask = (
+        (blue - red > 35) & (blue - green > 15) & (green - red > 15) & (blue > 2.5 * red)
+    ).astype(np.uint8)
+    return _largest_component(mask)
+
+
+def _largest_component(mask):
     n, _, stats, centres = cv2.connectedComponentsWithStats(mask, 8)
     candidates = [i for i in range(1, n) if stats[i, 4] >= 20]
     if not candidates:
@@ -29,7 +44,7 @@ def locate_green_block(image):
 
 
 class PlacementCompletion:
-    """Requires observed transport into the placement region, opening and stability.
+    """Requires transport, stability while held in the region, then observed release.
 
     A candidate ends motion through the existing confirmed-hold path. It does not
     certify task success; outcome annotation remains an independent operator step.
@@ -37,6 +52,10 @@ class PlacementCompletion:
 
     def __init__(self, config):
         self.config = dict(config)
+        color = config.get("object_color", "green")
+        if color not in ("green", "blue"):
+            raise ValueError("completion object_color must be green or blue")
+        self.locate = locate_green_block if color == "green" else locate_blue_block
         self.polygon = np.asarray(config["placement_polygon_px"], np.float32)
         if self.polygon.shape != (4, 2) or not np.isfinite(self.polygon).all():
             raise ValueError("placement polygon must contain four finite pixel coordinates")
@@ -53,6 +72,7 @@ class PlacementCompletion:
 
     def reset(self):
         self.seen_outside = False
+        self.closed_inside = False
         self.window = deque()
         self.next_due = float("-inf")
         self.last_sequence = None
@@ -63,7 +83,7 @@ class PlacementCompletion:
         self.next_due = now + self.config["sample_period_s"]
         self.last_sequence = sequence
         started = time.perf_counter()
-        result = self.observe(locate_green_block(image), gripper_m, now)
+        result = self.observe(self.locate(image), gripper_m, now)
         result["processing_s"] = time.perf_counter() - started
         return result
 
@@ -81,12 +101,16 @@ class PlacementCompletion:
             )
             if not inside:
                 self.seen_outside = True
-        eligible = self.seen_outside and inside and gripper_m >= self.config["open_width_m"]
+        # Establish object stability before release. Requiring a full stability
+        # interval after opening misses the observed brief release/re-close event.
+        eligible = self.seen_outside and inside
         if not eligible:
             self.window.clear()
+            self.closed_inside = False
         else:
             if self.window and now - self.window[-1][0] > self.config["max_gap_s"]:
                 self.window.clear()
+                self.closed_inside = False
             self.window.append((now, obj["centre"]))
             while len(self.window) > 1 and self.window[1][0] <= now - self.config["stable_s"]:
                 self.window.popleft()
@@ -94,13 +118,22 @@ class PlacementCompletion:
             if np.ptp(centres, axis=0).max() > self.config["max_centre_span_px"]:
                 self.window.clear()
                 self.window.append((now, obj["centre"]))
+                self.closed_inside = False
+            if gripper_m < self.config["open_width_m"]:
+                self.closed_inside = True
         stable = now - self.window[0][0] if self.window else 0.0
-        complete = len(self.window) >= 4 and stable >= self.config["stable_s"]
+        complete = (
+            len(self.window) >= 4
+            and stable >= self.config["stable_s"]
+            and self.closed_inside
+            and gripper_m >= self.config["open_width_m"]
+        )
         return {
             "candidate_complete": bool(complete),
             "object": obj,
             "inside_placement_region": bool(inside),
             "seen_outside": self.seen_outside,
+            "closed_inside": self.closed_inside,
             "observed_gripper_m": float(gripper_m),
             "stable_s": float(stable),
         }

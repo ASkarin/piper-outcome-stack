@@ -3,7 +3,11 @@ import numpy as np
 import pytest
 from test_xbox_pause import session as session, settle
 from test_policy_motion import Input, trial
-from piper_outcome_stack.policy_completion import PlacementCompletion, locate_green_block
+from piper_outcome_stack.policy_completion import (
+    PlacementCompletion,
+    locate_green_block,
+    locate_blue_block,
+)
 
 CFG = {
     "placement_polygon_px": [[0, 0], [200, 0], [200, 200], [0, 200]],
@@ -24,9 +28,9 @@ def test_requires_transport_opening_and_stationary_object():
     d.observe(OUTSIDE, 0.05, 1.0)
     for i in range(10):
         assert not d.observe(INSIDE, 0.054, 1.1 + i * 0.1)["candidate_complete"]
-    for i in range(4):
-        assert not d.observe(INSIDE, 0.09, 3.0 + i * 0.11)["candidate_complete"]
-    assert d.observe(INSIDE, 0.09, 3.44)["candidate_complete"]
+    # Stability is already established while holding; do not wait another
+    # 0.4 seconds after the brief release begins.
+    assert d.observe(INSIDE, 0.09, 2.11)["candidate_complete"]
     d.reset()
     assert not d.observe(INSIDE, 0.09, 4.0)["candidate_complete"]
 
@@ -38,6 +42,7 @@ def test_requires_transport_opening_and_stationary_object():
 def test_missing_outside_or_moving_detection_breaks_stability(interruption):
     d = PlacementCompletion(CFG)
     d.observe(OUTSIDE, 0.05, 0.0)
+    d.observe(INSIDE, 0.05, 0.05)
     for i in range(4):
         d.observe(INSIDE, 0.1, 0.1 + i * 0.1)
     assert not d.observe(interruption, 0.1, 0.45)["candidate_complete"]
@@ -55,6 +60,39 @@ def test_actual_rgb_detection_and_duplicate_frame_not_counted():
     assert d.update(image, 0.1, 1.0, 1) is not None
     assert d.update(image, 0.1, 2.0, 1) is None
     assert not d.update(image, 0.1, 2.1, 2)["candidate_complete"]
+
+
+def test_open_object_entering_region_without_closed_phase_does_not_complete():
+    d = PlacementCompletion({**CFG, "object_color": "blue", "open_width_m": 0.085})
+    d.observe(OUTSIDE, 0.1, 0.0)
+    for i in range(1, 12):
+        assert not d.observe(INSIDE, 0.1, i * 0.1)["candidate_complete"]
+    d.observe(INSIDE, 0.075, 1.2)
+    assert d.observe(INSIDE, 0.087, 1.3)["candidate_complete"]
+
+
+def test_stale_held_history_does_not_authorize_release_after_gap():
+    d = PlacementCompletion(CFG)
+    d.observe(OUTSIDE, 0.05, 0.0)
+    for i in range(1, 8):
+        d.observe(INSIDE, 0.05, i * 0.1)
+    assert not d.observe(INSIDE, 0.09, 1.5)["candidate_complete"]
+    for i in range(1, 8):
+        assert not d.observe(INSIDE, 0.09, 1.5 + i * 0.1)["candidate_complete"]
+
+
+def test_blue_detection_rejects_large_pale_wall_and_green_distractor():
+    image = np.zeros((480, 640, 3), np.uint8)
+    image[:70, 180:500] = [110, 155, 195]  # Pale blue wall is larger than the object.
+    image[250:310, 400:450] = [100, 190, 130]
+    image[330:370, 60:100] = [25, 165, 220]
+    assert locate_blue_block(image)["box_xywh"] == [60, 330, 40, 40]
+    assert locate_green_block(image)["box_xywh"] == [400, 250, 50, 60]
+    d = PlacementCompletion({**CFG, "object_color": "blue"})
+    d.observe(OUTSIDE, 0.05, 0.0)
+    assert d.update(image, 0.09, 0.1, 1)["object"]["box_xywh"] == [60, 330, 40, 40]
+    with pytest.raises(ValueError, match="object_color"):
+        PlacementCompletion({**CFG, "object_color": "unknown"})
 
 
 # Existing fake-robot fixture: no real hardware is opened.

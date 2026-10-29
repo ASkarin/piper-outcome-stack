@@ -8,7 +8,7 @@ from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 def fixture(index=0, inferred=True):
     chunk = np.arange(350, dtype=np.float32).reshape(50, 7) / 100000
     p = NS(
-        execution_chunk=lambda *args: (chunk, index, inferred),
+        execution_chunk=lambda *args, **kwargs: (chunk, index, inferred),
         select_target=lambda c, **kwargs: c[kwargs["chunk_index"]].copy(),
         generation_state=[0.0] * 7,
         generation_sequence=12,
@@ -21,7 +21,12 @@ def fixture(index=0, inferred=True):
     args = (
         p,
         obs,
-        dict(quality="checked", oldest_received_monotonic_s=1.0, sequence=13),
+        dict(
+            quality="checked",
+            oldest_received_monotonic_s=1.0,
+            observed_monotonic_s=1.0,
+            sequence=13,
+        ),
         NS(observation_max_age_s=0.1),
         None,
         lambda: 1.0,

@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Current project scope (2026-10-29)
+
+The user-authorized project deadline is 2026-12-31. Current core workstreams are ACT/SmolVLA real-robot learning and MuJoCo/sim2real; independent action-outcome prediction/failure-detection research was removed on 2026-10-28. Keep runtime protection, outcome labels and failure evidence. Planning amendments PR-20261028-02/03 supersede the dated scope below. Authorized delivery defaults to direct commits/pushes without creating PRs, following the user preference.
+
 ## PiPER transfer preference (2026-09-23)
 
 For authorized data/model transfers, initiate the connection on `piper-local` through its verified `piper-training` SSH alias. Push data or pull models directly between those machines; do not relay through Mac. Long transfers run as independent background jobs on local with persistent logs/status, so Mac→local SSH interruption does not stop them. Resolve connection parameters from local's own SSH configuration; do not copy Mac credentials or silently fall back to a Mac relay. This does not authorize hardware I/O or unrelated infrastructure changes.

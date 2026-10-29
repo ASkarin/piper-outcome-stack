@@ -108,7 +108,7 @@ class SmolVLAChunkPredictor:
         if coefficient is not None:
             raise ValueError("SmolVLA currently executes queued chunks without temporal ensemble")
 
-    def configure_rtc(self, enabled=True, *, num_steps=10, guidance="full-vjp"):
+    def configure_rtc(self, enabled=True, *, num_steps=10, guidance="native"):
         from lerobot.policies.rtc.configuration_rtc import RTCConfig
         from lerobot.configs import RTCAttentionSchedule
         from .rtc import PaperRTCProcessor
@@ -116,6 +116,17 @@ class SmolVLAChunkPredictor:
         if num_steps not in (5, 10):
             raise ValueError("this RTC validation supports five or ten denoising steps")
         self.model.config.num_steps = num_steps
+        self.rtc_guidance = guidance
+        if guidance in ("native", "native_joint6"):
+            from lerobot.policies.rtc.modeling_rtc import RTCProcessor
+            from .native_joint_rtc import NativeJointRTCProcessor
+
+            config = RTCConfig(enabled=True, execution_horizon=25) if enabled else None
+            self.model.config.rtc_config = config
+            processor_type = RTCProcessor if guidance == "native" else NativeJointRTCProcessor
+            processor = processor_type(config) if enabled else None
+            self.model.rtc_processor = self.model.model.rtc_processor = processor
+            return
         self.model.config.rtc_config = (
             RTCConfig(
                 enabled=True,
@@ -152,6 +163,30 @@ class SmolVLAChunkPredictor:
     def predict(self, image, state):
         return self.predict_chunk(image, state).actions
 
+    def _predict_with_action_padding(self, batch, noise, **options):
+        """Keep structural zero-action dimensions on their training noise path."""
+        flow = self.model.model
+        original = flow.denoise_step
+        action_dim = self.model.config.action_feature.shape[0]
+
+        def denoise_step(prefix_pad_masks, past_key_values, x_t, timestep):
+            constrained = torch.cat(
+                (x_t[..., :action_dim], timestep[:, None, None] * noise[..., action_dim:]),
+                dim=-1,
+            )
+            velocity = original(prefix_pad_masks, past_key_values, constrained, timestep)
+            return torch.cat(
+                (velocity[..., :action_dim], noise[..., action_dim:].to(velocity.dtype)), dim=-1
+            )
+
+        # The predictor's single inference worker owns this model. Keep the upstream
+        # sampler and RTC callback; restore the method even when inference fails.
+        flow.denoise_step = denoise_step
+        try:
+            return self.model.predict_action_chunk(batch, noise=noise, **options)
+        finally:
+            flow.denoise_step = original
+
     def predict_chunk(
         self,
         image,
@@ -184,16 +219,32 @@ class SmolVLAChunkPredictor:
                 noise = torch.as_tensor(noise, dtype=torch.float32, device=self.model.config.device)
                 if noise.shape != (1, 50, self.model.config.max_action_dim):
                     raise ValueError("invalid explicit SmolVLA noise shape")
-                options["noise"] = noise
+            initial_noise = (
+                self.model.model.sample_noise(
+                    (1, 50, self.model.config.max_action_dim), self.model.config.device
+                )
+                if noise is None
+                else noise
+            )
             if previous_model_actions is not None:
                 if self.model.config.rtc_config is None or not self.model.config.rtc_config.enabled:
                     raise ValueError("a previous chunk requires RTC to be enabled")
                 options.update(
-                    prev_chunk_left_over=previous_model_actions,
+                    prev_chunk_left_over=(
+                        torch.as_tensor(
+                            previous_model_actions,
+                            device=self.model.config.device,
+                            dtype=torch.float32,
+                        )
+                        if getattr(self, "rtc_guidance", None) in ("native", "native_joint6")
+                        else previous_model_actions
+                    ),
                     inference_delay=inference_delay,
                     execution_horizon=overlap_steps,
                 )
-            normalized = self.model.predict_action_chunk(self.preprocessor(batch), **options)
+            normalized = self._predict_with_action_padding(
+                self.preprocessor(batch), initial_noise, **options
+            )
             model_actions = normalized[0].detach().float().cpu().numpy().copy()
             absolute = self.postprocessor(normalized.clone())
         result = absolute[0].detach().float().cpu().numpy().copy()

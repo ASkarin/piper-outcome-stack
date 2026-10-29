@@ -5,7 +5,7 @@ from .safety import step_within_limit
 from .workspace import workspace_pose_allowed
 
 
-def check_execution_target(observation, target, safety):
+def check_execution_target(observation, target, safety, *, last_gripper_target=None):
     from pyAgxArm.utiles.mdh_kinematics import fk_from_mdh, get_mdh
 
     encoded = np.asarray(target, dtype=np.float32).astype(float).tolist()
@@ -33,7 +33,11 @@ def check_execution_target(observation, target, safety):
             raise ValueError(f"candidate J{i + 1} exceeds execution step")
     if not safety.gripper_lower <= g <= safety.gripper_upper:
         raise ValueError(f"candidate gripper outside bounds: {g}")
-    if not step_within_limit(g, observation[6], safety.max_gripper_step):
+    # Match robot._validate_gripper_target: only the exact already-dispatched
+    # command may be retained across feedback drift/contact. Compare before
+    # float32 conversion so a changed target cannot become an apparent hold.
+    retained_gripper = last_gripper_target is not None and float(target[6]) == last_gripper_target
+    if not retained_gripper and not step_within_limit(g, observation[6], safety.max_gripper_step):
         raise ValueError("candidate gripper exceeds execution step")
     mdh = list(get_mdh("piper"))
     current_pose = fk_from_mdh(mdh, observation[:6])

@@ -12,7 +12,7 @@ import torch
 
 from .retained_dataset import RetainedDataset, require_disjoint_sessions
 from piper_policy.smolvla_gripper import make_processors
-from piper_policy.smolvla import IMAGE_FEATURE, TASK_A, SmolVLAChunkPredictor, finetune_config
+from piper_policy.smolvla import IMAGE_FEATURE, SmolVLAChunkPredictor, finetune_config
 
 
 def write_json(path, value):
@@ -26,12 +26,24 @@ def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2, default=convert, allow_nan=False) + "\n")
 
 
+def validate_task(spec, task):
+    contract = spec["input_contract"]
+    expected = contract["tasks"] if "tasks" in contract else [contract["task"]]
+    if not isinstance(task, str) or not task.strip() or task not in expected:
+        raise ValueError(f"source task is not in the frozen input contract: {task!r}")
+    return task
+
+
 def make_views(spec):
-    train = RetainedDataset(spec["train_sources"], repo_id="local/smolvla-a-retained-train")
+    train = RetainedDataset(spec["train_sources"], repo_id="local/smolvla-retained-train")
     development = RetainedDataset(
-        spec["development_sources"], repo_id="local/smolvla-a-retained-development"
+        spec["development_sources"], repo_id="local/smolvla-retained-development"
     )
     require_disjoint_sessions(train, development)
+    for view in (train, development):
+        for row in view.lineage:
+            if "task" in row:
+                validate_task(spec, row["task"])
     if (len(train), train.num_episodes, development.num_episodes) != (
         spec["expected_train_frames"],
         spec["expected_train_episodes"],
@@ -119,8 +131,7 @@ def smoke(spec, output):
         pre.save_pretrained(initial)
         post.save_pretrained(initial)
         item = train[0]
-        if item["task"] != TASK_A:
-            raise ValueError("unexpected source task text")
+        task = validate_task(spec, item["task"])
         batch = next(
             iter(
                 torch.utils.data.DataLoader(
@@ -155,12 +166,12 @@ def smoke(spec, output):
         model.save_pretrained(checkpoint)
         pre.save_pretrained(checkpoint)
         post.save_pretrained(checkpoint)
-        predictor = SmolVLAChunkPredictor(model.eval(), pre, post, TASK_A)
+        predictor = SmolVLAChunkPredictor(model.eval(), pre, post, task)
         rgb = item[IMAGE_FEATURE].permute(1, 2, 0).numpy()
         state = item["observation.state"].numpy()
         torch.manual_seed(123)
         expected = predictor.predict(rgb, state)
-        reloaded = SmolVLAChunkPredictor.from_checkpoint(checkpoint, task=TASK_A)
+        reloaded = SmolVLAChunkPredictor.from_checkpoint(checkpoint, task=task)
         torch.manual_seed(123)
         actual = reloaded.predict(rgb, state)
         error = float(abs(actual - expected).max())
@@ -231,7 +242,7 @@ def train(spec):
     torch.set_num_threads(4)
     training, development = make_views(spec)
     root.mkdir(parents=True, exist_ok=True)
-    write_json(root / "dataset-manifest.json", view_report(training, development, spec))
+    write_json(root / "dataset-view.json", view_report(training, development, spec))
     subset = torch.utils.data.Subset(
         development, development.evaluation_indices(spec["evaluation"]["samples_per_episode"])
     )

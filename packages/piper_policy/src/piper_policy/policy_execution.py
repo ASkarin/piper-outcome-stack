@@ -63,7 +63,7 @@ class ACTChunkPredictor:
         self.n_action_steps = steps
         self.reset_execution()
 
-    def execution_chunk(self, image, state, sequence):
+    def execution_chunk(self, image, state, sequence, *, observed_monotonic_s=None):
         """Refresh only at the selected cadence; cached targets keep their old anchor."""
         inferred = self._chunk is None or self._next_chunk_index >= self.n_action_steps
         if inferred:

@@ -142,6 +142,8 @@ def test_predictor_preserves_raw_model_actions_before_in_place_postprocessing():
         chunk_size=50,
         n_action_steps=25,
         use_amp=False,
+        device="cpu",
+        max_action_dim=32,
     )
     output = torch.ones(1, 50, 7)
     output[:, :, 6] = -0.2
@@ -150,7 +152,12 @@ def test_predictor_preserves_raw_model_actions_before_in_place_postprocessing():
         x[:, :, 6].square_()
         return x
 
-    model = NS(config=config, reset=lambda: None, predict_action_chunk=lambda batch: output)
+    model = NS(
+        config=config,
+        model=NS(denoise_step=None, sample_noise=lambda shape, device: torch.zeros(shape)),
+        reset=lambda: None,
+        predict_action_chunk=lambda batch, **kw: output,
+    )
     p = SmolVLAChunkPredictor(model, lambda x: x, post, "task")
     result = p.predict_chunk(np.zeros((480, 640, 3), np.uint8), np.zeros(7))
     assert np.all(result.model_actions[:, 6] < 0) and np.all(result.actions[:, 6] > 0)

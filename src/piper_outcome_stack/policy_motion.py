@@ -86,6 +86,7 @@ def _run_policy_trial(
     record_action_chunks=False,
     completion_detector=None,
     candidate_fn=None,
+    gripper_reference_settings=None,
     clock=time.monotonic,
     sleep=time.sleep,
 ):
@@ -98,18 +99,20 @@ def _run_policy_trial(
         completion_detector.reset()
     inputs = PolicyInput(teleop, robot)
     robot.camera_input_poll = inputs.poll
-    sent, first_dispatch, ready_announced = 0, None, False
+    sent, startup_holds, first_dispatch, ready_announced = 0, 0, None, False
     observation = None
     reason = None
     while reason is None:
         start = clock()
         raw = inputs.poll()
         intent, epoch = control.observe(raw["hold"], raw["neutral"])
-        if first_dispatch is not None:
+        if first_dispatch is not None or startup_holds:
             if not raw["hold"]:
                 reason = "operator_released_or_cancelled"
             elif (max_actions is not None and sent >= max_actions) or (
-                max_run_s is not None and clock() - first_dispatch >= max_run_s
+                max_run_s is not None
+                and first_dispatch is not None
+                and clock() - first_dispatch >= max_run_s
             ):
                 reason = "segment_budget_reached"
             if reason is not None:
@@ -177,6 +180,9 @@ def _run_policy_trial(
                     safety,
                     clock,
                     record_action_chunks,
+                    control=control,
+                    epoch=epoch,
+                    gripper_reference_settings=gripper_reference_settings,
                 )
             except ValueError as exc:
                 row.update(phase="candidate_rejected", error=str(exc))
@@ -198,16 +204,24 @@ def _run_policy_trial(
                 row["discarded"] = reason
                 break
             action = OutcomePiperAction(target, intent="run", epoch=epoch)
+            action.gripper_plan = details.get("gripper_plan")
             action.generated_monotonic_s = generated
-            if first_dispatch is None:
+            startup_hold = (details.get("asynchronous_execution") or {}).get(
+                "phase"
+            ) == "initial_hold"
+            if first_dispatch is None and not startup_hold:
                 first_dispatch = clock()
             robot.send_action(action)
             row["sdk"] = deepcopy(robot.last_action_telemetry)
             if row["sdk"]["result"] != "sdk_returned":
                 reason = "dispatch_rejected"
                 break
-            sent += 1
-            row.update(phase="policy_sent", policy_action_index=sent)
+            if startup_hold:
+                startup_holds += 1
+                row.update(phase="policy_startup_hold_sent")
+            else:
+                sent += 1
+                row.update(phase="policy_sent", policy_action_index=sent)
         else:
             robot.send_action(hold_action(observation, control, clock))
             row["sdk"] = deepcopy(robot.last_action_telemetry)
@@ -224,6 +238,7 @@ def _run_policy_trial(
         status="segment_ended_held",
         end_reason=reason,
         policy_actions_sent=sent,
+        startup_hold_actions_sent=startup_holds,
         gripper_completion="command_only",
         hold_confirmed=control.hold_confirmed,
     )

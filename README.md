@@ -1,5 +1,7 @@
 # PiPER OutcomeStack
 
+2026-10-29阶段整合：两组SmolVLA fresh50k及RTC固定指令开发已收尾，56次累计原始24/29、平坦FM23/24成功，另3外部无效；批次背景、执行顺序和重复数的局限保留。共享策略源码统一为0.1.18，S2到达入口/插值配方与RTC/padding实现均进入版本管理。源码配方见[训练](experiments/smolvla_retrain_20261027/EXPERIMENT.md)与[RTC运行](experiments/smolvla_50k_rtc_20261027/README.md)，权威模型/原始数据在既有运行目录。项目截止2026-12-31，独立结果预测/失败检测研究已取消，见规划仓库当前修订。下方日期段保留历史语义。
+
 2026-10-17：当前实机ACT阶段收尾、四模型固定，准备阶段3必要SmolVLA与sim2real衔接。见[阶段交接](docs/reports/stage2_closeout_20261017.md)及[固定接口](docs/operations/stage2_interface_contract_20261017.md)。最新验证包含失败，不能称全项目验收完成。
 
 ## Current status and entry points (2026-09-29)
@@ -21,7 +23,7 @@ planning-only statements where they say so.
 Current operator default (approved 2026-09-20): piper record uses 50 Hz control/Dataset and 640×480 RGBD at 60 fps, with time-based gripper reference and incremental A/Y planning. Save seals raw data; piper convert SESSION creates the independent Dataset offline. See [operator shortcuts](infra/local-controller/operator/README.md). Historical 20 Hz datasets and teaching next-state labels retain their own provenance.
 
 PiPER OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
-evaluation, simulation/sim2real, and action-outcome stack for the standard PiPER. This repository is the
+evaluation and simulation/sim2real stack for the standard PiPER. This repository is the
 code and experiment-evidence source. The control repository holds the roadmap, current
 status, decisions, and canonical planning records.
 

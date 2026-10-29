@@ -24,6 +24,8 @@ def config():
         chunk_size=50,
         n_action_steps=2,
         use_amp=False,
+        device="cpu",
+        max_action_dim=32,
     )
 
 
@@ -35,7 +37,10 @@ def test_smolvla_image_scaling_language_and_absolute_output():
         return batch
 
     model = NS(
-        config=config(), reset=lambda: None, predict_action_chunk=lambda batch: torch.ones(1, 50, 7)
+        config=config(),
+        model=NS(denoise_step=None, sample_noise=lambda shape, device: torch.zeros(shape)),
+        reset=lambda: None,
+        predict_action_chunk=lambda batch, **kw: torch.ones(1, 50, 7),
     )
     predictor = SmolVLAChunkPredictor(model, pre, lambda x: x * 2, TASK_A)
     image = np.full((480, 640, 3), 255, np.uint8)

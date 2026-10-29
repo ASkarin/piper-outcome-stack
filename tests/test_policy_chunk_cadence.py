@@ -37,7 +37,12 @@ def test_cached_targets_are_checked_against_current_feedback(monkeypatch):
         args = (
             p,
             obs,
-            dict(quality="checked", oldest_received_monotonic_s=1.0, sequence=i),
+            dict(
+                quality="checked",
+                oldest_received_monotonic_s=1.0,
+                observed_monotonic_s=1.0,
+                sequence=i,
+            ),
             NS(observation_max_age_s=0.1),
             None,
             lambda: 1.0,

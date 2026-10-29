@@ -1,4 +1,6 @@
-# piper-policy 0.1.13
+# piper-policy 0.1.18
+
+Version 0.1.18 consolidates native joint-only RTC, the structural 7/32 action-padding path, and the existing absolute/delta/fixed-feedback reach interfaces. Frozen experiment wheels and deployed bundles retain their recorded versions.
 
 Shared pure ACT/SmolVLA prediction, relative processors, temporal ensembling, asynchronous chunk queues, RTC and numerical transforms. No simulation or hardware imports.
 

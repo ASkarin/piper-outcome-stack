@@ -37,3 +37,22 @@ def test_envelope_counts_report_violations_without_clipping_predictions():
     assert result["any_rejection"] == 3
     assert result["joint_box_rejections"] == 1 and result["gripper_box_rejections"] == 1
     np.testing.assert_array_equal(prediction, original)
+
+
+def test_grouped_errors_counts_original_demonstrations_not_segments():
+    from piper_outcome_stack.smolvla_evaluate import grouped_errors
+
+    pred = np.zeros((3, 1, 7))
+    pred[:, :, 6] = np.array([1, 1, 3])[:, None] / 1000
+    truth = np.zeros_like(pred)
+    provenance = [
+        {
+            "task": "left",
+            "lineage": {"source_session": "s", "source_episode": ep, "layout": "layout1"},
+        }
+        for ep in (0, 0, 1)
+    ]
+    result = grouped_errors(pred, truth, np.ones((3, 1), dtype=bool), provenance)
+    row = result["macro_task_layout"][0]
+    assert row["demonstrations"] == 2
+    assert row["chunk_gripper_mae_mm"] == 2

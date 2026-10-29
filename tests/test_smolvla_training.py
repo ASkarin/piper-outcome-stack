@@ -7,6 +7,13 @@ from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 from piper_outcome_stack import smolvla_training
 
 
+def test_multitask_contract_keeps_each_instruction_and_rejects_unknown():
+    spec = {"input_contract": {"tasks": ["green left", "green right"]}}
+    assert smolvla_training.validate_task(spec, "green right") == "green right"
+    with pytest.raises(ValueError, match="frozen input contract"):
+        smolvla_training.validate_task(spec, "task A")
+
+
 def test_presplit_development_satisfies_official_trainer_validation(monkeypatch, tmp_path):
     monkeypatch.setattr(
         smolvla_training,
