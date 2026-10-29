@@ -114,3 +114,34 @@ def test_existing_absolute_checkpoint_without_new_field_is_unchanged(tmp_path):
     restored = ReachBCPolicy.from_pretrained(tmp_path, strict=True, local_files_only=True)
     assert restored.config.joint_representation == "absolute"
     torch.testing.assert_close(restored.select_action(batch()), expected, rtol=0, atol=0)
+
+
+def test_feedback_endpoint_labels_goal_only_and_fixed_state_gain(tmp_path):
+    recipe = config()
+    recipe.joint_representation = "feedback_endpoint"
+    recipe.joint_mean = [0.5] * 6
+    policy = ReachBCPolicy(recipe)
+    for parameter in policy.parameters():
+        parameter.data.zero_()
+    sample = batch()
+    sample["observation.state"][:, :6] = 0.2
+    sample["action"][:, :6] = 0.26  # actual teacher label: .8 * .2 + .2 * .5
+    assert policy(sample)[0].item() < 1e-10
+    predicted = policy.select_action(sample)
+    torch.testing.assert_close(predicted[:, :6], torch.full((3, 6), 0.26))
+    assert policy.model[0].in_features == 3
+    assert sum(p.numel() for p in policy.parameters()) == 17798
+    endpoint_before = policy._joint_prediction(sample).detach().clone()
+    sample["observation.state"] += 0.1
+    torch.testing.assert_close(policy._joint_prediction(sample), endpoint_before, rtol=0, atol=0)
+    torch.testing.assert_close(
+        policy.select_action(sample)[:, :6] - predicted[:, :6], torch.full((3, 6), 0.08)
+    )
+    policy.save_pretrained(tmp_path)
+    restored = ReachBCPolicy.from_pretrained(tmp_path, strict=True, local_files_only=True)
+    torch.testing.assert_close(
+        restored.select_action(sample), policy.select_action(sample), rtol=0, atol=0
+    )
+    # No clipping; existing execution checks remain responsible for rejecting large outputs.
+    restored.model[-1].bias.data.fill_(100)
+    assert (restored.select_action(sample)[:, :6] > 2).all()

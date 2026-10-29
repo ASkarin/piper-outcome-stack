@@ -11,6 +11,13 @@ from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot.optim.optimizers import AdamConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 
+FEEDBACK_GAIN = 0.2
+
+
+def feedback_endpoint_target(action, state):
+    """Recover the fixed teacher's endpoint from the actual physical labels."""
+    return (action[:, :6] - (1 - FEEDBACK_GAIN) * state[:, :6]) / FEEDBACK_GAIN
+
 
 @PreTrainedConfig.register_subclass("piper_reach_bc")
 @dataclass
@@ -43,8 +50,8 @@ class ReachBCConfig(PreTrainedConfig):
         return None
 
     def validate_features(self):
-        if self.joint_representation not in ("absolute", "delta"):
-            raise ValueError("reach joints must use absolute or delta representation")
+        if self.joint_representation not in ("absolute", "delta", "feedback_endpoint"):
+            raise ValueError("unsupported reach joint representation")
         expected = {
             "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(7,)),
             "observation.environment_state": PolicyFeature(type=FeatureType.ENV, shape=(3,)),
@@ -78,8 +85,13 @@ class ReachBCPolicy(PreTrainedPolicy):
         super().__init__(config)
         config.validate_features()
         self.config = config
+        input_width = 3 if config.joint_representation == "feedback_endpoint" else 10
         self.model = nn.Sequential(
-            nn.Linear(10, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, 6)
+            nn.Linear(input_width, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 6),
         )
         for name in ("input_mean", "input_scale", "joint_mean", "joint_scale"):
             self.register_buffer(name, torch.tensor(getattr(config, name), dtype=torch.float32))
@@ -98,7 +110,10 @@ class ReachBCPolicy(PreTrainedPolicy):
         values = torch.cat([state, goal], dim=-1)
         if not torch.isfinite(values).all():
             raise ValueError("reach input is not finite")
-        return self.model((values - self.input_mean) / self.input_scale)
+        normalized = (values - self.input_mean) / self.input_scale
+        if self.config.joint_representation == "feedback_endpoint":
+            normalized = normalized[:, 7:]
+        return self.model(normalized)
 
     def forward(self, batch, reduction="mean"):
         predicted = self._joint_prediction(batch)
@@ -115,6 +130,8 @@ class ReachBCPolicy(PreTrainedPolicy):
         joint_target = target[:, :6]
         if self.config.joint_representation == "delta":
             joint_target = joint_target - batch["observation.state"][:, :6]
+        elif self.config.joint_representation == "feedback_endpoint":
+            joint_target = feedback_endpoint_target(target, batch["observation.state"])
         truth = (joint_target - self.joint_mean) / self.joint_scale
         per_sample = (predicted - truth).square().mean(dim=-1)
         if reduction not in ("mean", "none"):
@@ -127,6 +144,9 @@ class ReachBCPolicy(PreTrainedPolicy):
         joints = self._joint_prediction(batch) * self.joint_scale + self.joint_mean
         if self.config.joint_representation == "delta":
             joints = joints + batch["observation.state"][:, :6]
+        elif self.config.joint_representation == "feedback_endpoint":
+            state = batch["observation.state"][:, :6]
+            joints = state + FEEDBACK_GAIN * (joints - state)
         gripper = joints.new_full((len(joints), 1), self.config.fixed_gripper_m)
         actions = torch.cat([joints, gripper], dim=-1)
         if not torch.isfinite(actions).all():
