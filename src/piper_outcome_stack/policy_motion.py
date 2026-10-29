@@ -1,4 +1,4 @@
-"""One operator-controlled ACT segment using PiPER's existing hold/stop lifecycle."""
+"""One operator-controlled policy segment using PiPER's existing hold/stop lifecycle."""
 
 import math
 import time
@@ -85,6 +85,7 @@ def _run_policy_trial(
     frame_recorder=None,
     record_action_chunks=False,
     completion_detector=None,
+    candidate_fn=None,
     clock=time.monotonic,
     sleep=time.sleep,
 ):
@@ -168,7 +169,7 @@ def _run_policy_trial(
                     break
             generated = clock()
             try:
-                target, details = predict_candidate(
+                target, details = (candidate_fn or predict_candidate)(
                     predictor,
                     observation,
                     robot.last_observation_telemetry,
