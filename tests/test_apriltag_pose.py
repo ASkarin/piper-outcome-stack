@@ -8,7 +8,32 @@ from piper_outcome_stack.apriltag_pose import (
     pose_solutions,
     relative_pose,
     camera_matrix,
+    refine_rows,
 )
+
+
+def test_subpixel_uses_original_dimensions_and_preserves_source_rows(tmp_path):
+    image = np.full((200, 200, 3), 255, np.uint8)
+    marker = cv2.aruco.generateImageMarker(
+        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_25h9), 1, 80
+    )
+    image[60:140, 60:140] = marker[:, :, None]
+    assert cv2.imwrite(str(tmp_path / "frame.png"), image)
+    rows = [
+        dict(
+            sample=0,
+            rgb_path="frame.png",
+            detections=[],
+            camera=dict(color=dict(intrinsics=dict(width=200, height=200))),
+        )
+    ]
+    refined, parameters = refine_rows(rows, tmp_path)
+    assert rows[0]["detections"] == []
+    assert [x["id"] for x in refined[0]["detections"]] == [1]
+    assert parameters["method"] == "CORNER_REFINE_SUBPIX"
+    rows[0]["camera"]["color"]["intrinsics"]["width"] = 100
+    with pytest.raises(ValueError, match="dimensions mismatch"):
+        refine_rows(rows, tmp_path)
 
 
 def project(rotation, translation, k):

@@ -1,6 +1,7 @@
 """Offline square-tag pose diagnostics; retain both planar solutions and all frames."""
 
 import argparse
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -109,6 +110,48 @@ def rotation_stats(matrices):
     )
 
 
+def refine_rows(rows, image_root):
+    """One declared subpixel variant on the same raw images; originals stay intact."""
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.errorCorrectionRate = 0.0
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    detector = cv2.aruco.ArucoDetector(
+        cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_25h9), parameters
+    )
+    output = []
+    for original in rows:
+        row = deepcopy(original)
+        path = image_root / row["rgb_path"]
+        image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        intr = row["camera"]["color"]["intrinsics"]
+        if image is None or image.shape[:2] != (intr["height"], intr["width"]):
+            raise ValueError(f"original image/intrinsic dimensions mismatch: {path}")
+        corners, ids, _ = detector.detectMarkers(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
+        row["detections"] = []
+        if ids is not None:
+            for identity, points in zip(ids[:, 0], corners, strict=True):
+                points = points.reshape(4, 2)
+                row["detections"].append(
+                    dict(
+                        id=int(identity),
+                        corners_pixels=points.tolist(),
+                        centre_pixels=points.mean(axis=0).tolist(),
+                        edge_lengths_pixels=np.linalg.norm(
+                            np.roll(points, -1, axis=0) - points, axis=1
+                        ).tolist(),
+                    )
+                )
+        output.append(row)
+    return output, dict(
+        method="CORNER_REFINE_SUBPIX",
+        error_correction_rate=0.0,
+        maximum_window_pixels=parameters.cornerRefinementWinSize,
+        relative_window=parameters.relativeCornerRefinmentWinSize,
+        max_iterations=parameters.cornerRefinementMaxIterations,
+        minimum_accuracy=parameters.cornerRefinementMinAccuracy,
+    )
+
+
 def analyze(rows, reference_id, tool_id, reference_side_m, tool_side_m):
     frames = []
     for row in rows:
@@ -203,10 +246,21 @@ def main(argv=None):
     parser.add_argument("--reference-side-m", type=float, required=True)
     parser.add_argument("--tool-side-m", type=float, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--refine-images",
+        type=Path,
+        help="one standard subpixel variant on original saved PNGs; no recapture",
+    )
     args = parser.parse_args(argv)
     started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=False)
     rows = [json.loads(line) for line in args.frames.read_text().splitlines()]
+    refinement = None
+    if args.refine_images is not None:
+        rows, refinement = refine_rows(rows, args.refine_images)
+        with (args.output / "refined-frames.jsonl").open("x") as stream:
+            for row in rows:
+                stream.write(json.dumps(row, allow_nan=False) + "\n")
     result = analyze(rows, args.reference_id, args.tool_id, args.reference_side_m, args.tool_side_m)
     result.update(
         source_frames=str(args.frames.resolve()),
@@ -216,6 +270,7 @@ def main(argv=None):
         tool_side_m=args.tool_side_m,
         opencv_version=cv2.__version__,
         method="SOLVEPNP_IPPE_SQUARE",
+        corner_refinement=refinement,
         coordinate_convention="T_camera_tag; T_reference_tool = inverse(T_camera_reference) * T_camera_tool",
         reprojection_definition="RMS Euclidean image distance over four corners",
         hardware_io=False,
