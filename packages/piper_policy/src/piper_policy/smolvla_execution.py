@@ -1,4 +1,4 @@
-"""Asynchronous native RTC with continuous causal joint low-pass filtering."""
+"""Native RTC with the explicit filtered or frozen unfiltered execution recipe."""
 
 from functools import partial
 import math
@@ -53,8 +53,11 @@ class AsyncSmolVLAExecutor:
     rtc_num_steps = 10
     rtc_initial_delay = 20
 
-    def __init__(self, predictor, *, request_stride=25, clock=time.monotonic):
+    def __init__(self, predictor, *, request_stride=25, joint_lowpass=True, clock=time.monotonic):
+        if type(joint_lowpass) is not bool:
+            raise ValueError("joint_lowpass must explicitly select a boolean recipe")
         self.predictor = predictor
+        self.joint_lowpass = joint_lowpass
         self.clock = clock
         self.worker = None
         self.n_action_steps = request_stride
@@ -86,7 +89,8 @@ class AsyncSmolVLAExecutor:
         if self.origin is None:
             self.origin = observed_monotonic_s
             self.initial_state = state.copy()
-            self.joint_filter = JointLowPassPlan(self.initial_state)
+            if self.joint_lowpass:
+                self.joint_filter = JointLowPassPlan(self.initial_state)
             self.generation_state, self.generation_sequence = state.tolist(), sequence
             self.worker = ChunkWorker(
                 partial(self.predictor.predict_chunk, gripper_lower_bound="zero")
@@ -107,8 +111,10 @@ class AsyncSmolVLAExecutor:
         active = self.timeline.active
         changed = active is not None and self.published != active.observation_tick
         if changed:
-            active.execution_actions = self.joint_filter.publish(
-                active.actions, active.observation_tick, tick
+            active.execution_actions = (
+                self.joint_filter.publish(active.actions, active.observation_tick, tick)
+                if self.joint_lowpass
+                else project_gripper(active.actions, "zero")
             )
             active.committed_model_actions = self.predictor.encode_execution_actions(
                 active.execution_actions
@@ -162,15 +168,18 @@ class AsyncSmolVLAExecutor:
                 for k, v in record["rtc_request"].items()
                 if k not in ("prefix_model_actions", "prefix_execution_actions")
             },
-            "target_transform": "butterworth2_5hz_joints_and_gripper_max_zero",
-            "joint_filter_cutoff_hz": 5.0,
+            "target_transform": self.target_transform,
+            "joint_filter_cutoff_hz": 5.0 if self.joint_lowpass else None,
         }
         if changed:
             self.execution_details["rtc_request"] = record["rtc_request"]
-            self.execution_details["filtered_execution_actions_rad_m"] = (
-                active.execution_actions.tolist()
-            )
-            self.execution_details["filter_start_index"] = self.joint_filter.start_index
+            self.execution_details[
+                "filtered_execution_actions_rad_m"
+                if self.joint_lowpass
+                else "execution_actions_rad_m"
+            ] = active.execution_actions.tolist()
+            if self.joint_lowpass:
+                self.execution_details["filter_start_index"] = self.joint_filter.start_index
         self.origins = {k: v for k, v in self.origins.items() if k >= active.observation_tick}
         return active.actions, timing["chunk_index"], changed
 
@@ -185,8 +194,16 @@ class AsyncSmolVLAExecutor:
             **self.execution_details,
             "raw_target_rad_m": raw.tolist(),
             "gripper_correction_m": float(target[6] - raw[6]),
-            "target_transform": "butterworth2_5hz_joints_and_gripper_max_zero",
-            "joint_filter_cutoff_hz": 5.0,
+            "target_transform": self.target_transform,
+            "joint_filter_cutoff_hz": 5.0 if self.joint_lowpass else None,
             "gripper_projection": "zero",
         }
         return target
+
+    @property
+    def target_transform(self):
+        return (
+            "butterworth2_5hz_joints_and_gripper_max_zero"
+            if self.joint_lowpass
+            else "raw_joints_and_gripper_max_zero"
+        )

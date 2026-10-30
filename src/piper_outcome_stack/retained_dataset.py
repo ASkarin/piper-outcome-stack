@@ -192,3 +192,13 @@ def require_disjoint_sessions(train, development):
     }
     if overlap:
         raise ValueError(f"train/development source sessions overlap: {sorted(overlap)}")
+    chains = [
+        {
+            row["task_context"]["chain_id"]
+            for row in view.lineage
+            if row.get("task_context", {}).get("chain_id")
+        }
+        for view in (train, development)
+    ]
+    if chains[0] & chains[1]:
+        raise ValueError("train/development C chains overlap")

@@ -17,7 +17,7 @@ def label_path(trial):
     return trial.with_name(trial.stem + ".outcome.json")
 
 
-def label(trial, outcome, position=None, note=None):
+def label(trial, outcome, position=None, note=None, interventions=None):
     trial = Path(trial)
     report = json.loads(trial.read_text())
     position = position or report.get("position")
@@ -25,6 +25,16 @@ def label(trial, outcome, position=None, note=None):
         raise ValueError(f"outcome must be one of {OUTCOMES}")
     if not position:
         raise ValueError("trial has no position label; pass --position")
+    context = report.get("task_context")
+    if context and context.get("task_family") == "C":
+        if report.get("mode") != "run":
+            raise ValueError("C software checks are not task trials")
+        if outcome == "success" and (
+            report.get("status") != "segment_ended_held" or not report.get("hold_confirmed")
+        ):
+            raise ValueError("C success cannot override a program failure or unconfirmed hold")
+        if report.get("status") == "failed" and outcome != "failure":
+            raise ValueError("C program failures must remain failed trials")
     value = dict(
         trial=trial.name,
         position=position,
@@ -34,6 +44,8 @@ def label(trial, outcome, position=None, note=None):
         end_reason=report.get("end_reason"),
         policy_actions_sent=report.get("policy_actions_sent"),
     )
+    if context:
+        value.update(task_context=context, task=report["task"], interventions=interventions or [])
     with label_path(trial).open("x") as stream:
         json.dump(value, stream, indent=2, ensure_ascii=False)
         stream.write("\n")
@@ -52,8 +64,14 @@ def prompt_label(trial, input_fn=input, output_fn=print):
     output_fn(
         "程序状态：" + str(report.get("status")) + "；停止结果：" + str(report.get("stop_outcome"))
     )
-    output_fn("请按实际任务结果标注，程序报错不自动等于抓放失败。")
-    output_fn("1 成功：抓起、搬运、放下并松爪全部完成。")
+    context = report.get("task_context")
+    if context and context.get("task_family") == "C":
+        output_fn("程序状态与物理观察分别保留；程序故障回合计失败。")
+        output_fn("本次只评价单技能，不代表完整C任务。")
+        output_fn("1 成功：" + context["success_description"])
+    else:
+        output_fn("请按实际任务结果标注，程序报错不自动等于抓放失败。")
+        output_fn("1 成功：抓起、搬运、放下并松爪全部完成。")
     output_fn("2 失败：任务未全部完成。")
     output_fn("3 废次：摆放等外部条件不符合要求，必须说明原因。")
     output_fn("回车跳过：保留日志，稍后标注；不会自动开始下一轮。")
@@ -76,6 +94,11 @@ def prompt_label(trial, input_fn=input, output_fn=print):
             output_fn("请输入1、2、3，或直接回车跳过。")
         outcome = choices[answer]
         note = ""
+        interventions = []
+        if context and context.get("task_family") == "C":
+            intervention = input_fn("中途人工调整/接管（没有则回车）：").strip()
+            if intervention:
+                interventions.append(intervention)
         if outcome != "success":
             note = input_fn("失败阶段或废次原因：").strip()
             while outcome == "invalid" and not note:
@@ -83,7 +106,7 @@ def prompt_label(trial, input_fn=input, output_fn=print):
     except (EOFError, KeyboardInterrupt):
         output_fn("本轮暂未标注，原始日志已保留。")
         return None
-    return label(trial, outcome, note=note or None)
+    return label(trial, outcome, note=note or None, interventions=interventions)
 
 
 def wilson(successes, n, z=1.959963984540054):
@@ -101,8 +124,19 @@ def summarize(paths):
     cells = {}
     for path in paths:
         value = json.loads(Path(path).read_text())
-        cell = cells.setdefault(value["position"], dict(success=0, failure=0, invalid=0))
+        context = value.get("task_context")
+        key = value["position"]
+        if context and context.get("task_family") == "C":
+            key = "/".join(
+                [context["scene_id"], context["skill_id"], context.get("object_id", "-")]
+            )
+        cell = cells.setdefault(key, dict(success=0, failure=0, invalid=0))
         cell[value["task_outcome"]] += 1
+        if context and context.get("task_family") == "C":
+            cell["assisted"] = cell.get("assisted", 0) + bool(value.get("interventions"))
+            cell["unassisted_successes"] = cell.get("unassisted_successes", 0) + (
+                value["task_outcome"] == "success" and not value.get("interventions")
+            )
     rows = {}
     for position, cell in sorted(cells.items()):
         n = cell["success"] + cell["failure"]
@@ -112,6 +146,11 @@ def summarize(paths):
             success_rate=None if n == 0 else cell["success"] / n,
             wilson95=wilson(cell["success"], n),
         )
+        if "unassisted_successes" in cell:
+            rows[position].update(
+                scope="single_skill_operator_stopped",
+                unassisted_success_rate=None if n == 0 else cell["unassisted_successes"] / n,
+            )
     return rows
 
 
@@ -123,13 +162,14 @@ def main(argv=None):
     add.add_argument("outcome", choices=OUTCOMES)
     add.add_argument("--position")
     add.add_argument("--note")
+    add.add_argument("--intervention", action="append")
     prompt = commands.add_parser("prompt")
     prompt.add_argument("trial", type=Path)
     report = commands.add_parser("summarize")
     report.add_argument("labels", type=Path, nargs="+")
     args = parser.parse_args(argv)
     if args.command == "label":
-        result = label(args.trial, args.outcome, args.position, args.note)
+        result = label(args.trial, args.outcome, args.position, args.note, args.intervention)
     elif args.command == "prompt":
         if sys.stdout.isatty():
             result = prompt_label(

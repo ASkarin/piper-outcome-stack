@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace as NS
 import sys
+import hashlib
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "infra/local-controller/operator"))
 import provenance
@@ -145,3 +147,98 @@ def test_act_routes_to_explicit_frozen_bundle_without_direct_hardware(tmp_path, 
     assert calls == [
         [p["python"], str(tmp_path / "frozen-bundle/run.py"), "blue-left", "2", "--verify-only"]
     ]
+
+
+def test_smolvla_routes_frozen_recipe_and_verify_only_does_not_load_models(tmp_path, monkeypatch):
+    p = profile(tmp_path)
+    bundle = tmp_path / "smolvla"
+    bundle.mkdir()
+    entry = bundle / "run-policy.py"
+    entry.write_text("# frozen entry\n")
+    (bundle / "freeze.json").write_text(
+        json.dumps(
+            {
+                "models": {"original": {}, "flat": {}},
+                "tasks": {"blue-left": "blue left"},
+                "files": [
+                    {
+                        "path": entry.name,
+                        "bytes": entry.stat().st_size,
+                        "sha256": hashlib.sha256(entry.read_bytes()).hexdigest(),
+                    }
+                ],
+            }
+        )
+    )
+    p["smolvla_bundle"] = str(bundle)
+    calls = []
+    monkeypatch.setattr(op.subprocess, "call", lambda cmd: calls.append(cmd) or 0)
+    args = NS(command="smolvla", model="flat", skill="blue-left", layout="2", verify_only=True)
+    assert op.execute(args, p) == 0 and calls == []
+    args.verify_only = False
+    op.execute(args, p)
+    assert calls == [[p["python"], str(entry), "run", "flat", "blue-left", "2"]]
+    entry.write_text("# changed\n")
+    with pytest.raises(ValueError, match="Frozen SmolVLA asset changed"):
+        op.execute(args, p)
+    assert len(calls) == 1
+
+
+def test_c_capture_has_separate_paths_and_retains_skill_context(tmp_path, monkeypatch):
+    p = profile(tmp_path)
+    cfg = {
+        "robot": {"scene": {"scene_id": "synthetic-c"}},
+        "teleop": {},
+        "dataset": {"fps": 50, "num_episodes": 1},
+        "task_c": {
+            "drawer_id": "drawer01",
+            "position_id": "C-p1",
+            "objects": {"cup01": "蓝色杯子"},
+            "duration_s": {"store_cup": 2},
+        },
+    }
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(cfg))
+    p["record_c_config"] = str(path)
+    monkeypatch.setattr(op.subprocess, "run", lambda *a, **kw: NS(returncode=0, stdout="measured"))
+    monkeypatch.setattr(provenance, "capture", lambda *a: None)
+    calls = []
+    monkeypatch.setattr(op, "logged", lambda cmd, run: calls.append((cmd, run)) or 0)
+    op.execute(
+        NS(
+            command="record",
+            mode="c",
+            skill="store_cup",
+            object_id="cup01",
+            chain_id=None,
+            split="development",
+            layout=None,
+        ),
+        p,
+    )
+    command, run = calls[0]
+    saved = json.loads((run / "config.json").read_text())
+    assert command[:4] == ["sudo", "piper-socketcan", "exec", "--"]
+    assert "/task-c/" in saved["raw_root"] and "/task-c/" in saved["dataset"]["root"]
+    assert saved["recording_context"]["skill_id"] == "store_cup"
+    assert saved["recording_context"]["object_id"] == "cup01"
+    assert "蓝色杯子" in saved["dataset"]["single_task"]
+
+
+def test_c_check_shortcut_never_uses_sudo(tmp_path, monkeypatch):
+    p = profile(tmp_path)
+    calls = []
+    monkeypatch.setattr(op.subprocess, "call", lambda cmd: calls.append(cmd) or 0)
+    op.execute(
+        NS(
+            command="c",
+            mode="check",
+            config=tmp_path / "c.json",
+            skill="open_drawer",
+            object_id=None,
+            chain_id=None,
+        ),
+        p,
+    )
+    assert calls[0][:4] == [p["python"], "-m", "piper_outcome_stack.task_c", "check"]
+    assert "sudo" not in calls[0]

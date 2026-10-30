@@ -304,6 +304,21 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
     task_goal = getattr(cfg, "recording_task_goal", None)
     split = getattr(cfg, "recording_split", None)
     layout_description = getattr(cfg, "recording_layout_description", None)
+    context = getattr(cfg, "recording_context", None)
+    if context is not None and (
+        not isinstance(context, dict)
+        or not context
+        or any(not isinstance(v, str) or not v.strip() for v in context.values())
+    ):
+        raise ValueError("recording_context requires non-empty text values")
+    if context and not {"start_condition", "success_description"} <= context.keys():
+        raise ValueError("recording_context requires start_condition and success_description")
+    if context and context.get("task_family") == "C":
+        scene = getattr(cfg.robot, "scene", None)
+        if scene is None or context.get("scene_id") != scene.scene_id:
+            raise ValueError("C recording context differs from the actual scene")
+        if split not in ("train", "development"):
+            raise ValueError("C recording requires an explicit data split")
     if task_goal is not None and (type(task_goal) is not int or task_goal <= 0):
         raise ValueError("recording_task_goal must be a positive integer")
     if split is not None and split not in ("train", "development"):
@@ -354,6 +369,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
                 layout_description=layout_description,
                 intended_split=split,
                 task_goal=task_goal,
+                **({"context": context} if context else {}),
             ),
             scene=asdict(cfg.robot.scene) if cfg.robot.scene else None,
             timing=asdict(cfg.robot.capture_timing) if cfg.robot.capture_timing else None,
@@ -424,6 +440,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             layout_description=layout_description,
             split=split,
             task_goal=task_goal,
+            context=context,
         )
         success = True
     except BaseException as exc:

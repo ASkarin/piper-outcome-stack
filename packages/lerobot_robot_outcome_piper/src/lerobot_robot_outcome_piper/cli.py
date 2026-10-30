@@ -31,6 +31,7 @@ class PiperRecordConfig(RecordConfig):
     recording_layout_description: str | None = None
     recording_split: str | None = None
     recording_task_goal: int | None = None
+    recording_context: dict[str, str] | None = None
 
 
 @dataclass

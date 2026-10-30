@@ -1,0 +1,36 @@
+{
+  "id": "b-smolvla-fixed-20261029",
+  "operator_profile_key": "smolvla_bundle",
+  "controller_bundle": "/home/fff/piper-runs/smolvla-50k-rtc-20261027",
+  "entry": "run-policy.py",
+  "models": {
+    "original": {
+      "run_id": "smolvla-b-original-fresh-20261027-seed42",
+      "checkpoint_step": 50000
+    },
+    "flat": {
+      "run_id": "smolvla-b-flat-fresh-20261027-seed42",
+      "checkpoint_step": 50000
+    }
+  },
+  "tasks": {
+    "green-left": "把绿色方块放到左区。",
+    "green-right": "把绿色方块放到右区。",
+    "blue-left": "把天蓝色六边形块放到左区。",
+    "blue-right": "把天蓝色六边形块放到右区。"
+  },
+  "execution": {
+    "control_hz": 50,
+    "request_stride": 25,
+    "denoising_steps": 10,
+    "initial_delay_ticks": 20,
+    "guidance": "native_joint6",
+    "joint_lowpass": false,
+    "gripper_projection": "zero",
+    "action_padding": "t*initial_noise for25structural dimensions",
+    "seed": 42,
+    "duration_s": 60
+  },
+  "source_of_truth": "controller bundle freeze.json, operator-config.json and unchanged source snapshot",
+  "scope": "Two accepted fixed-instruction B development models; 56-attempt closeout, not C checkpoints or free-language acceptance"
+}

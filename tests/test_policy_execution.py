@@ -183,6 +183,7 @@ def test_smolvla_zero_projection_is_logged_before_existing_target_checks(monkeyp
     raw = np.zeros((50, 7), np.float32)
     raw[:, 6] = -0.00017
     ex = AsyncSmolVLAExecutor.__new__(AsyncSmolVLAExecutor)
+    ex.joint_lowpass = True
     ex.timeline = NS(active=None)
     ex.execution_details = {"phase": "policy"}
     ex.generation_state = [0.0] * 7

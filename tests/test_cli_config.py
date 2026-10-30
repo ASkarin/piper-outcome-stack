@@ -89,6 +89,10 @@ def test_official_cli_parses_complete_config_before_workflow(tmp_path, monkeypat
         config["recording_layout_description"] = "六边形在上，绿色在下"
         config["recording_split"] = "development"
         config["recording_task_goal"] = 1
+        config["recording_context"] = {
+            "start_condition": "synthetic start",
+            "success_description": "synthetic complete",
+        }
         config["dataset"] = dict(
             repo_id="test/parser",
             single_task="parser only",
@@ -117,3 +121,4 @@ def test_official_cli_parses_complete_config_before_workflow(tmp_path, monkeypat
         assert parsed.recording_position == "B-layout2"
         assert parsed.recording_split == "development"
         assert parsed.recording_task_goal == 1
+        assert parsed.recording_context == config["recording_context"]

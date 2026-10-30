@@ -215,3 +215,18 @@ training. ACT and SmolVLA share the same source episodes and split grouping.
 ## Stage2 interface freeze (2026-10-17)
 
 The explicit `act_bundle` profile field selects the immutable controller bundle. See `docs/operations/stage2_interface_contract_20261017.md`. No automatic success labels or motion are created by verification.
+
+## 2026-10-30：固化SmolVLA与C软件准备
+
+收尾的两组050000模型及原RTC源码继续使用原目录，profile增加`smolvla_bundle`。常用入口与ACT一样委托冻结资产：
+
+```bash
+piper smolvla original green-left 1 --verify-only
+piper smolvla flat blue-right 2 --verify-only
+piper smolvla original green-left 1
+piper smolvla flat blue-right 2
+```
+
+verify-only核对freeze.json中的资产身份，不加载模型或连接设备；实际run仍调用原run-policy.py，保持两模型、四模板、两布局及原操作者启动行为。原56次记录不改写。无默认模型替换，也不把这两组B模型称为已训练的C模型。
+
+C新增`piper record c --skill ... --split ...`与`piper c check|run --config ... --skill ...`，完整参数、数据与验证范围见[任务C说明](../../../docs/operations/piper_task_c.md)。record_c_config只指向C专用配置；待实物配置完成前，模板缺项会明确拒绝。原A/B入口保持。

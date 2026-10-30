@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,25 @@ B_LAYOUTS = {
 }
 
 
+def verify_smolvla_bundle(bundle, model):
+    """Like ACT verify-only, inspect fixed assets instead of loading GPU models."""
+    freeze = load(bundle / "freeze.json")
+    if model not in freeze["models"] or not freeze.get("files"):
+        raise ValueError("模型或文件清单不在已固化SmolVLA资产中")
+    for item in freeze["files"]:
+        if item.get("model") not in (None, model):
+            continue
+        path = Path(item["path"])
+        path = path if path.is_absolute() else bundle / path
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        if path.stat().st_size != item["bytes"] or digest.hexdigest() != item["sha256"]:
+            raise ValueError(f"Frozen SmolVLA asset changed: {path}")
+    return freeze
+
+
 def configure_b_session(cfg, args):
     split = getattr(args, "split", None)
     if split is None:
@@ -80,6 +100,61 @@ def configure_b_session(cfg, args):
 
 def execute(args, profile):
     cli = str(Path(profile["python"]).parent / "piper-outcome-stack")
+    if args.command == "smolvla":
+        if "smolvla_bundle" not in profile:
+            raise ValueError("尚未配置已固化的 smolvla_bundle")
+        bundle = Path(profile["smolvla_bundle"])
+        freeze = verify_smolvla_bundle(bundle, args.model)
+        if args.model not in freeze["models"] or args.skill not in freeze["tasks"]:
+            raise ValueError("模型或技能不在已固化SmolVLA清单中")
+        if args.verify_only:
+            print("Frozen SmolVLA assets verified; no model loading or hardware I/O.")
+            return 0
+        command = [
+            profile["python"],
+            str(bundle / "run-policy.py"),
+            "run",
+            args.model,
+            args.skill,
+            args.layout,
+        ]
+        return subprocess.call(command)
+    if args.command == "c":
+        run = new_run(profile, "task-c")
+        output = run / "trial.json"
+        command = [
+            profile["python"],
+            "-m",
+            "piper_outcome_stack.task_c",
+            args.mode,
+            "--config",
+            str(args.config),
+            "--skill",
+            args.skill,
+            "--output",
+            str(output),
+        ]
+        if args.object_id is not None:
+            command += ["--object", args.object_id]
+        if args.chain_id is not None:
+            command += ["--chain-id", args.chain_id]
+        if args.mode == "check":
+            return subprocess.call(command)
+        from provenance import capture
+
+        capture(profile, run)
+        code = logged(["sudo", "piper-socketcan", "exec", "--", *command], run)
+        if output.exists() and load(output).get("hardware_io"):
+            subprocess.call(
+                [
+                    profile["python"],
+                    "-m",
+                    "piper_outcome_stack.policy_trials",
+                    "prompt",
+                    str(output),
+                ]
+            )
+        return code
     if args.command == "act":
         bundle = Path(profile["act_bundle"])
         command = [profile["python"], str(bundle / "run.py"), args.skill, args.layout]
@@ -89,10 +164,15 @@ def execute(args, profile):
     if args.command in ("status", "link", "firmware", "limits", "acceleration"):
         return subprocess.call(["sudo", "-n", "/usr/local/sbin/piper-query", args.command])
     if args.command == "record":
-        if getattr(args, "mode", "a") != "b" and (
-            getattr(args, "layout", None) or getattr(args, "split", None)
+        mode = getattr(args, "mode", "a")
+        if (mode == "a" and getattr(args, "split", None)) or (
+            mode != "b" and getattr(args, "layout", None)
         ):
-            raise ValueError("--layout/--split仅用于B采集")
+            raise ValueError("--layout仅用于B采集；--split用于B/C采集")
+        if mode != "c" and any(
+            getattr(args, key, None) for key in ("skill", "object_id", "chain_id")
+        ):
+            raise ValueError("--skill/--object/--chain-id仅用于C采集")
         root = Path(profile["raw_parent"])
         mounted = subprocess.run(
             ["findmnt", "-rn", "-M", profile["ssd_mount"], "-o", "UUID"],
@@ -113,21 +193,27 @@ def execute(args, profile):
                 os.fsync(probe.fileno())
         except OSError as exc:
             raise ValueError(f"采集SSD不可写：{root}：{exc}；尚未连接设备。") from exc
-        mode = getattr(args, "mode", "a")
-        config_key = "record_b_config" if mode == "b" else "record_config"
+        config_key = {"a": "record_config", "b": "record_b_config", "c": "record_c_config"}[mode]
         if config_key not in profile:
-            raise ValueError("尚未配置B采集入口 record_b_config")
+            raise ValueError(f"尚未配置采集入口 {config_key}")
         cfg = load(profile[config_key])
         if mode == "b":
             if not cfg.get("recording_tasks"):
                 raise ValueError("B采集配置缺少任务菜单")
             cfg = configure_b_session(cfg, args)
-            root = root / "task-b"
+        elif mode == "c":
+            from piper_outcome_stack.task_c import configure_recording
+
+            cfg = configure_recording(cfg, args.skill, args.object_id, args.split, args.chain_id)
+        if mode in ("b", "c"):
+            root = root / ("task-" + mode)
             root.mkdir(exist_ok=True)
-        run = new_run(profile, "record-b" if mode == "b" else "record")
+        run = new_run(profile, "record-" + mode if mode in ("b", "c") else "record")
         cfg["raw_root"] = str(root / run.name)
         cfg["dataset"]["root"] = str(
-            Path(profile["dataset_parent"]) / ("task-b" if mode == "b" else "") / run.name
+            Path(profile["dataset_parent"])
+            / ("task-" + mode if mode in ("b", "c") else "")
+            / run.name
         )
         cfg["dataset"]["repo_id"] = "local/xbox-" + run.name
         cfg["resume"] = False
@@ -214,13 +300,29 @@ def main(argv=None):
     )
     sub = parser.add_subparsers(dest="command", required=True)
     record = sub.add_parser("record")
-    record.add_argument("mode", nargs="?", choices=("a", "b"), default="a")
+    record.add_argument("mode", nargs="?", choices=("a", "b", "c"), default="a")
     record.add_argument("--layout", choices=("1", "2"))
     record.add_argument("--split", choices=("train", "development"))
+    record.add_argument("--skill", choices=("open_drawer", "store_cup", "close_drawer"))
+    record.add_argument("--object", dest="object_id")
+    record.add_argument("--chain-id")
     act = sub.add_parser("act", help="Run the selected frozen ACT bundle")
     act.add_argument("skill", choices=("green-left", "green-right", "blue-left", "blue-right"))
     act.add_argument("layout", choices=("1", "2"))
     act.add_argument("--verify-only", action="store_true")
+    smolvla = sub.add_parser("smolvla", help="Run the frozen 50k original/flat RTC bundle")
+    smolvla.add_argument("model", choices=("original", "flat"))
+    smolvla.add_argument("skill", choices=("green-left", "green-right", "blue-left", "blue-right"))
+    smolvla.add_argument("layout", choices=("1", "2"))
+    smolvla.add_argument("--verify-only", action="store_true")
+    task_c = sub.add_parser("c", help="Check or run one C skill from the current pose")
+    task_c.add_argument("mode", choices=("check", "run"))
+    task_c.add_argument("--config", type=Path, required=True)
+    task_c.add_argument(
+        "--skill", choices=("open_drawer", "store_cup", "close_drawer"), required=True
+    )
+    task_c.add_argument("--object", dest="object_id")
+    task_c.add_argument("--chain-id")
     for name in ("recover", "status", "link", "firmware", "limits", "acceleration"):
         sub.add_parser(name)
     for name in ("convert", "audit", "pauses"):

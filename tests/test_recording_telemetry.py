@@ -425,8 +425,9 @@ def test_centered_gripper_updates_hold_reference_without_faking_joint_writes(tmp
 
 
 @pytest.mark.parametrize("redo", [False, True])
+@pytest.mark.parametrize("c_skill", [None, "open_drawer", "store_cup", "close_drawer"])
 def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
-    tmp_path, monkeypatch, redo
+    tmp_path, monkeypatch, redo, c_skill
 ):
     from lerobot_robot_outcome_piper.teleop_control import TeleopControl
     from lerobot_robot_outcome_piper.scene import SceneContext
@@ -438,6 +439,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     robot, teleop, _, _ = devices(monkeypatch)
     # Preparation/resume may already have advanced the synthetic clock past 1 s.
     robot._observation_count = 25
+    outcome_label = "success" if c_skill and not redo else "failure"
     scene = SceneContext(
         "synthetic-new-table",
         "synthetic fixed base",
@@ -509,7 +511,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
             assert self.count < 500, "interactive phase stalled"
             phase = c.recording_phase
             if phase == "preparing" and "start" not in self.sent:
-                return "start p1"  # Retry explicitly if the first request preceded preparation.
+                return "1" if c_skill else "start p1"
             if phase == "recording":
                 self.sent.add("start")
                 return "end"
@@ -519,7 +521,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
                 return "redo"
             if phase == "review" and "save" not in self.sent:
                 self.sent.add("save")
-                return "save failure missed grasp"
+                return "save " + outcome_label
             return None
 
     monkeypatch.setattr(record_control, "TerminalCommands", Commands)
@@ -528,6 +530,28 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     cfg.robot.capture_timing = None
     cfg.raw_root = str(tmp_path / "raw")
     cfg.teleop = xbox_config(control_hz=30)
+    if c_skill:
+        from piper_outcome_stack.task_c import select_skill
+
+        selected = select_skill(
+            {
+                "robot": {"scene": {"scene_id": scene.scene_id}},
+                "task_c": {
+                    "drawer_id": "synthetic-drawer",
+                    "objects": {"cup01": "蓝色杯子"},
+                    "position_id": "C-fixed",
+                    "duration_s": {c_skill: 0.001},
+                },
+            },
+            c_skill,
+            "cup01" if c_skill == "store_cup" else None,
+        )
+        cfg.recording_context = selected["context"]
+        cfg.recording_tasks = {"1": selected["task"]}
+        cfg.recording_position = selected["position"]
+        cfg.recording_split = "development"
+        cfg.dataset.fps = 50
+        cfg.teleop = xbox_config(control_hz=50)
     raw = record_with_telemetry(cfg, teleop_action_processor=pipeline)
     from lerobot_robot_outcome_piper.xbox_raw import convert
 
@@ -542,7 +566,17 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
         2 if redo else 1
     )
     outcome = next(e for e in events if e["event"] == "episode_outcome")
-    assert outcome["task_outcome"] == "failure" and outcome["data_valid"] is True
+    assert outcome["task_outcome"] == outcome_label and outcome["data_valid"] is True
+    if c_skill:
+        for event in ("episode_started", "episode_save_requested", "episode_outcome"):
+            matching = [e for e in events if e["event"] == event]
+            assert matching and all(e["task_context"] == selected["context"] for e in matching)
+        assert loaded[0]["task"] == selected["task"]
+        raw_spec = json.loads((raw.root / "raw.json").read_text())
+        assert raw_spec["capture_context"]["recording"]["context"] == selected["context"]
+    else:
+        raw_spec = json.loads((raw.root / "raw.json").read_text())
+        assert "context" not in raw_spec["capture_context"]["recording"]
     summary = json.loads(log.with_name("timing-summary.json").read_text())
     assert summary["all_samples"]["samples"] == 1
     replayed = smoke._replay(loaded, loaded.root)
@@ -550,7 +584,8 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     cfg.resume = True
     cfg.dataset.repo_id = ds.repo_id
     cfg.robot.scene = SceneContext("another-scene", "base", "view", "area")
-    with pytest.raises(ValueError, match="resume schema or scene differs"):
+    error = "C recording context" if c_skill else "resume schema or scene differs"
+    with pytest.raises(ValueError, match=error):
         record_with_telemetry(cfg, teleop_action_processor=pipeline)
 
     cfg.robot.scene = scene
@@ -560,6 +595,29 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     convert(resumed.root, next_output, cfg.dataset.repo_id)
     reloaded = LeRobotDataset(cfg.dataset.repo_id, root=next_output)
     assert verify_telemetry(next_output, reloaded) == {"episodes": 2, "frames": 2}
+    if c_skill:
+        from piper_outcome_stack.task_c import capture_manifest
+        from piper_outcome_stack.retained_dataset import RetainedDataset
+
+        session = tmp_path / "operator-session"
+        session.mkdir()
+        (session / "config.json").write_text(
+            json.dumps(
+                {
+                    "dataset": {"root": str(next_output), "repo_id": cfg.dataset.repo_id},
+                    "recording_split": "development",
+                    "recording_context": selected["context"],
+                }
+            )
+        )
+        manifest = capture_manifest([session])
+        source = manifest["sources"]["development"][0]
+        assert len(source["segments"]) == (2 if outcome_label == "success" else 0)
+        assert len(source["excluded"]) == (0 if outcome_label == "success" else 2)
+        if source["segments"]:
+            view = RetainedDataset([source])
+            assert view[0]["task"] == selected["task"]
+            assert view.lineage[0]["task_context"] == selected["context"]
 
 
 def test_motion_record_gc_is_deferred_until_device_cleanup(tmp_path, monkeypatch):

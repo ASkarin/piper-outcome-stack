@@ -1,0 +1,27 @@
+{
+  "robot": null,
+  "teleop": null,
+  "dataset": {
+    "fps": 50,
+    "num_episodes": null,
+    "episode_time_s": null,
+    "single_task": null,
+    "video": true,
+    "push_to_hub": false
+  },
+  "task_c": {
+    "drawer_id": null,
+    "objects": {},
+    "position_id": null,
+    "duration_s": {
+      "open_drawer": null,
+      "store_cup": null,
+      "close_drawer": null
+    }
+  },
+  "policy": {
+    "checkpoint": null,
+    "vlm_assets": null,
+    "reference_inputs": {}
+  }
+}

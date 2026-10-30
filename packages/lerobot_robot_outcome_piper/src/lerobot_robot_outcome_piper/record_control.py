@@ -47,6 +47,7 @@ class EpisodeControls:
         layout_description=None,
         split=None,
         task_goal=None,
+        context=None,
     ):
         self.control, self.events, self.terminal, self.emit = control, events, terminal, emit
         self.phase = None
@@ -58,6 +59,7 @@ class EpisodeControls:
         self.layout_description = layout_description
         self.split = split
         self.task_goal = task_goal
+        self.context = context
         self.task_counts = {k: dict(success=0, failure=0, cancelled=0) for k in self.tasks}
         self.task_id = None
         self.task = None
@@ -113,9 +115,14 @@ class EpisodeControls:
                 + (f"本会话用途：{self.split}\n" if self.split else "")
                 + self.task_progress()
                 + "\n"
-                + "松开LB并回中，等待保持确认；复位两个物块，再输入任务编号开始：\n"
+                + (
+                    "松开LB并回中，等待保持确认；按本技能起始条件就位，再输入任务编号：\n"
+                    if self.context
+                    else "松开LB并回中，等待保持确认；复位两个物块，再输入任务编号开始：\n"
+                )
                 + "\n".join(f"{key}：{task}" for key, task in self.tasks.items())
-                + "\nq：退出并保留已保存回合。左右以固定相机画面为准。"
+                + "\nq：退出并保留已保存回合。"
+                + ("" if self.context else "左右以固定相机画面为准。")
             )
         if phase == "recording":
             messages[phase] += "\n回车也可结束本回合。"
@@ -123,8 +130,8 @@ class EpisodeControls:
                 "\n松LB自动暂停示范数据；重新按LB操作时自动恢复。任务需要保持时按住LB并让摇杆回中。"
             )
             if self.tasks:
-                messages[phase] += (
-                    f"\n布局 {self.position}｜任务 {self.task_id}：{self.task}（相机画面左/右）"
+                messages[phase] += f"\n布局 {self.position}｜任务 {self.task_id}：{self.task}" + (
+                    "" if self.context else "（相机画面左/右）"
                 )
         if phase == "review":
             messages[phase] = (
@@ -133,6 +140,9 @@ class EpisodeControls:
                 "r：放弃重录；q：放弃本次并退出。回车不作决定。"
             )
         operator_message(messages[phase])
+        if self.context and phase in ("preparing", "review"):
+            key = "start_condition" if phase == "preparing" else "success_description"
+            operator_message(self.context[key])
         if phase == "preparing":
             operator_message("fine / normal：松LB、回中并保持确认后选择精细/常规档。")
         if phase == "preparing" and self.control.gripper_target is None:
@@ -334,7 +344,7 @@ class EpisodeControls:
                     else "该命令无需附加参数。"
                 )
             if self.tasks and self.phase == "preparing" and ready:
-                hint = "复位物块后输入上方任务编号；q退出。"
+                hint = "按本任务起始条件就位后输入上方任务编号；q退出。"
             operator_message(f"[未执行] {hint}")
             return
         self.request = request
@@ -354,6 +364,7 @@ def run_interactive_episodes(
     layout_description=None,
     split=None,
     task_goal=None,
+    context=None,
 ):
     """SDK traffic remains in the ordinary loop; workers only save/discard/finalize."""
     terminal = TerminalCommands() if terminal is None else terminal
@@ -370,6 +381,7 @@ def run_interactive_episodes(
         layout_description=layout_description,
         split=split,
         task_goal=task_goal,
+        context=context,
     )
     processor = loop_args["teleop_action_processor"]
 
@@ -460,6 +472,7 @@ def run_interactive_episodes(
                     intended_split=split,
                     task_id=ui.task_id,
                     task=ui.task if tasks else loop_args.get("single_task"),
+                    **({"task_context": context} if context else {}),
                 )
                 loop("recording", recording=True)
                 loop("review")
@@ -484,6 +497,7 @@ def run_interactive_episodes(
                     task=ui.task if tasks else loop_args.get("single_task"),
                     task_outcome=request[1],
                     note=request[2],
+                    **({"task_context": context} if context else {}),
                 )
                 save_started = time.monotonic()
 
@@ -501,6 +515,7 @@ def run_interactive_episodes(
                             task_outcome=request[1],
                             note=request[2],
                             data_valid=True,
+                            **({"task_context": context} if context else {}),
                             save_duration_s=time.monotonic() - save_started,
                         )
                     audit.flush()

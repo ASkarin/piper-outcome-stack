@@ -257,3 +257,53 @@ def test_filter_holds_constant_and_does_not_silently_clip_joint_overshoot():
     assert result[:, 0].max() > step[14, 0]
     # Existing downstream limits decide whether such a target can be dispatched.
     np.testing.assert_array_equal(result[:, 6], raw[:, 6])
+
+
+def test_unfiltered_recipe_matches_archived_closeout_actions_and_rtc_prefix(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).parents[3] / "experiments/smolvla_50k_rtc_20261027/rtc_executor.py"
+    spec = importlib.util.spec_from_file_location("piper_policy._closeout_rtc", path)
+    archived = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(archived)
+    monkeypatch.setattr(archived, "ChunkWorker", Worker)
+    monkeypatch.setattr("piper_policy.smolvla_execution.ChunkWorker", Worker)
+    clock = Clock()
+
+    def predictor():
+        return NS(
+            model=NS(reset=lambda: None),
+            predict_chunk=lambda *a: None,
+            configure_rtc=lambda *a, **kw: None,
+            encode_execution_actions=lambda a: a + 10,
+        )
+
+    current = AsyncSmolVLAExecutor(predictor(), joint_lowpass=False, clock=clock)
+    frozen = archived.AsyncSmolVLAExecutor(predictor(), clock=clock)
+    state = np.arange(7, dtype=np.float32) * 0.01
+    raw = np.random.default_rng(42).normal(size=(50, 7)).astype(np.float32) * 0.01
+    raw[:, 6] = -0.001
+    for ex in (current, frozen):
+        call(ex, clock, state)
+    for now, origin in ((0.24, 0), (0.74, 25)):
+        clock.now = now
+        targets = []
+        for ex in (current, frozen):
+            ex.worker.result = rtc_result(raw.copy(), origin, 0.24)
+            chunk, index, new = call(ex, clock, state + 0.01, 2)
+            targets.append(ex.select_target(chunk, chunk_index=index, new_chunk=new))
+        np.testing.assert_array_equal(targets[0], targets[1])
+        np.testing.assert_array_equal(targets[0][:6], raw[12, :6])
+        assert targets[0][6] == 0 and current.joint_filter is None
+        clock.now = now + 0.26
+        for ex in (current, frozen):
+            call(ex, clock, state + 0.02, 3)
+        np.testing.assert_array_equal(
+            current.worker.requests[-1][3]["previous_model_actions"],
+            frozen.worker.requests[-1][3]["previous_model_actions"],
+        )
+    worker = current.worker
+    current.reset_execution()
+    assert worker.closed and current.worker is None and current.origin is None
+    assert current.origins == {} and current.timeline.active is None
