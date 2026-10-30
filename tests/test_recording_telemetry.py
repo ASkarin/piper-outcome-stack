@@ -43,7 +43,11 @@ class Robot(smoke.FakeRobot):
 
     def send_action(self, action):
         result = super().send_action(action)
-        self.last_action_telemetry = dispatched(result, self._observation_count)
+        self.last_action_telemetry = dispatched(
+            result,
+            self._observation_count,
+            time_s=self.last_observation_telemetry["observed_monotonic_s"] + 0.001,
+        )
         return result
 
 
@@ -432,6 +436,8 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 
     robot, teleop, _, _ = devices(monkeypatch)
+    # Preparation/resume may already have advanced the synthetic clock past 1 s.
+    robot._observation_count = 25
     scene = SceneContext(
         "synthetic-new-table",
         "synthetic fixed base",
