@@ -232,8 +232,7 @@ def run(spec_path):
                 cmd = [
                     spec["simulation_python"],
                     "-m",
-                    "piper_outcome_stack.ops",
-                    "sim",
+                    "piper_sim.cli",
                     "policy",
                     "--policy-type",
                     "smolvla",

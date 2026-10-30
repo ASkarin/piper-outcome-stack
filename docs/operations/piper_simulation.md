@@ -8,4 +8,6 @@
 
 主项目负责真实数据、训练业务、设备 SDK 与控制；共享纯策略由 `packages/piper_policy` 提供，仿真安装固定 wheel。原 `piper-outcome-stack sim`、`simulation` extra、`infra/simulation/setup.sh` 已移除。
 
+`smolvla_pipeline` 和 `rtc_experiment` 的仿真阶段通过 spec 中显式指定的 `simulation_python` 调用 `-m piper_sim.cli policy`。该解释器必须属于已安装独立仿真仓库及学习依赖的环境，`simulation_config` 必须指向该仓库的实际场景配置；历史 spec 不会自动改写。
+
 只读文件导入现有实机记录；历史数据、模型、视频和日志仍在原位置，源代码和环境记录见迁移证据 `artifacts/simulation/split-20261003`（训练机 `/workspace/piper/staging/csm/simulation-split-20261003`）。历史快照不代表当前入口。本轮不部署 `piper-local` 或操作实机。
