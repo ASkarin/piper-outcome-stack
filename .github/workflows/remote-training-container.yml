@@ -198,16 +198,23 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          echo "key=$(python infra/container/ci/build_inputs.py key HEAD)" >> "$GITHUB_OUTPUT"
           if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
-            build=$(python infra/container/ci/build_inputs.py "$BASE_SHA" "$HEAD_SHA")
+            build=$(python infra/container/ci/build_inputs.py changed "$BASE_SHA" HEAD)
             echo "build=$build" >> "$GITHUB_OUTPUT"
           fi
-      - name: Reclaim runner disk for the CUDA container build
+      - name: Restore successful container validation
         if: steps.image-inputs.outputs.build == 'true'
+        id: validated-image
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/piper-container-validation
+          key: container-validated-${{ runner.os }}-${{ runner.arch }}-${{ steps.image-inputs.outputs.key }}
+      - name: Reclaim runner disk for the CUDA container build
+        if: steps.image-inputs.outputs.build == 'true' && steps.validated-image.outputs.cache-hit != 'true'
         run: infra/container/ci/reclaim_runner_space.sh
       - name: Validate Compose rendering
         env:
@@ -223,8 +230,19 @@ jobs:
           PIPER_GROUP_GID: "20003"
         run: docker compose -f infra/container/compose.yaml config --quiet
       - name: Build the locked container without publishing
-        if: steps.image-inputs.outputs.build == 'true'
-        run: docker build --file infra/container/Dockerfile --tag piper-outcome-stack-ci:${{ github.sha }} .
+        if: steps.image-inputs.outputs.build == 'true' && steps.validated-image.outputs.cache-hit != 'true'
+        env:
+          VALIDATION_RECORD: ${{ runner.temp }}/piper-container-validation
+        run: |
+          docker build --file infra/container/Dockerfile --tag piper-outcome-stack-ci:${{ github.sha }} .
+          printf '%s\n' "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" > "$VALIDATION_RECORD"
+      - name: Report reused container validation
+        if: steps.image-inputs.outputs.build == 'true' && steps.validated-image.outputs.cache-hit == 'true'
+        env:
+          VALIDATION_RECORD: ${{ runner.temp }}/piper-container-validation
+        run: |
+          echo "Container inputs match a successful build; Docker build skipped." >> "$GITHUB_STEP_SUMMARY"
+          cat "$VALIDATION_RECORD" >> "$GITHUB_STEP_SUMMARY"
       - name: Report unchanged base-image inputs
         if: steps.image-inputs.outputs.build != 'true'
         run: echo "Base-image inputs unchanged; container-build completed without building an image."
