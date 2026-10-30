@@ -6,6 +6,7 @@ Labels are sidecars (`<trial>.outcome.json`); trial JSON evidence is never rewri
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 OUTCOMES = ("success", "failure", "invalid")
@@ -37,6 +38,52 @@ def label(trial, outcome, position=None, note=None):
         json.dump(value, stream, indent=2, ensure_ascii=False)
         stream.write("\n")
     return value
+
+
+def prompt_label(trial, input_fn=input, output_fn=print):
+    """Ask only after a trial exits; never starts or accesses robot devices."""
+    trial = Path(trial)
+    report = json.loads(trial.read_text())
+    if label_path(trial).exists():
+        value = json.loads(label_path(trial).read_text())
+        output_fn("本轮已标注为 " + value["task_outcome"] + "，保留原标注。")
+        return value
+    output_fn("试跑程序已结束。位置：" + str(report.get("position", "未记录")))
+    output_fn(
+        "程序状态：" + str(report.get("status")) + "；停止结果：" + str(report.get("stop_outcome"))
+    )
+    output_fn("请按实际任务结果标注，程序报错不自动等于抓放失败。")
+    output_fn("1 成功：抓起、搬运、放下并松爪全部完成。")
+    output_fn("2 失败：任务未全部完成。")
+    output_fn("3 废次：摆放等外部条件不符合要求，必须说明原因。")
+    output_fn("回车跳过：保留日志，稍后标注；不会自动开始下一轮。")
+    choices = {
+        "1": "success",
+        "2": "failure",
+        "3": "invalid",
+        "success": "success",
+        "failure": "failure",
+        "invalid": "invalid",
+    }
+    try:
+        while True:
+            answer = input_fn("结果 [1/2/3/回车跳过]：").strip().lower()
+            if not answer:
+                output_fn("本轮暂未标注，原始日志已保留。")
+                return None
+            if answer in choices:
+                break
+            output_fn("请输入1、2、3，或直接回车跳过。")
+        outcome = choices[answer]
+        note = ""
+        if outcome != "success":
+            note = input_fn("失败阶段或废次原因：").strip()
+            while outcome == "invalid" and not note:
+                note = input_fn("废次必须注明外部原因；未完成抓放应选失败。原因：").strip()
+    except (EOFError, KeyboardInterrupt):
+        output_fn("本轮暂未标注，原始日志已保留。")
+        return None
+    return label(trial, outcome, note=note or None)
 
 
 def wilson(successes, n, z=1.959963984540054):
@@ -76,14 +123,29 @@ def main(argv=None):
     add.add_argument("outcome", choices=OUTCOMES)
     add.add_argument("--position")
     add.add_argument("--note")
+    prompt = commands.add_parser("prompt")
+    prompt.add_argument("trial", type=Path)
     report = commands.add_parser("summarize")
     report.add_argument("labels", type=Path, nargs="+")
     args = parser.parse_args(argv)
     if args.command == "label":
         result = label(args.trial, args.outcome, args.position, args.note)
+    elif args.command == "prompt":
+        if sys.stdout.isatty():
+            result = prompt_label(
+                args.trial,
+                input_fn=lambda message: input("\r" + message),
+                output_fn=lambda message: print(message, end="\r\n", flush=True),
+            )
+        else:
+            result = prompt_label(args.trial)
     else:
         result = summarize(args.labels)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    rendered = json.dumps(result, indent=2, ensure_ascii=False)
+    if args.command == "prompt" and sys.stdout.isatty():
+        print(rendered.replace("\n", "\r\n"), end="\r\n", flush=True)
+    else:
+        print(rendered)
     return 0
 
 

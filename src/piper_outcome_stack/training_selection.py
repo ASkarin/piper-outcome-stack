@@ -24,6 +24,22 @@ def xbox_outcomes(root):
                 if index in outcomes:
                     raise ValueError("duplicate saved episode outcome")
                 outcomes[index] = e
+    mapping_path = Path(root) / "demonstration-segments.json"
+    if mapping_path.exists():
+        segments = json.loads(mapping_path.read_text())["segments"]
+        outcomes = {
+            segment["episode_index"]: {
+                **outcomes[segment["source_episode_index"]],
+                "episode_index": segment["episode_index"],
+                "source_episode_index": segment["source_episode_index"],
+                "source_session": segment["source_session"],
+                "source_attempt": segment["source_attempt"],
+                "segment_first_frame": segment["first_frame"],
+                "segment_end_frame_exclusive": segment["end_frame_exclusive"],
+            }
+            for segment in segments
+            if segment["source_episode_index"] in outcomes
+        }
     return outcomes
 
 
@@ -51,6 +67,17 @@ def prepare(config_path, output_config, validation_episodes):
     outcomes = xbox_outcomes(root)
     successful = sorted(i for i, e in outcomes.items() if is_successful_demonstration(e))
     require_successful_selection(root, validation_episodes)
+    # All continuous segments from one original demonstration stay in one split.
+    validation_parents = {
+        (outcomes[i].get("source_session"), outcomes[i].get("source_episode_index", i))
+        for i in validation_episodes
+    }
+    validation_episodes = sorted(
+        i
+        for i in successful
+        if (outcomes[i].get("source_session"), outcomes[i].get("source_episode_index", i))
+        in validation_parents
+    )
     training = [i for i in successful if i not in validation_episodes]
     if not training:
         raise ValueError("whole-episode split leaves no training demonstrations")
@@ -71,7 +98,7 @@ def prepare(config_path, output_config, validation_episodes):
                 validation_episodes=validation_episodes,
                 excluded_episodes=[i for i in range(dataset.num_episodes) if i not in successful],
                 outcomes=outcomes,
-                split_unit="whole_episode",
+                split_unit="original_source_episode",
             ),
             indent=2,
         )

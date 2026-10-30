@@ -65,6 +65,7 @@ WORKDIR /opt/piper/build
 COPY pyproject.toml uv.lock .python-version ./
 COPY packages/lerobot_robot_outcome_piper/pyproject.toml \
     packages/lerobot_robot_outcome_piper/pyproject.toml
+COPY packages/piper_policy/ packages/piper_policy/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv python install "${PYTHON_VERSION}" \

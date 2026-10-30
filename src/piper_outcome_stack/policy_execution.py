@@ -1,180 +1,10 @@
-"""Synchronous ACT chunks decoded at their generation state, with absolute targets."""
+"""Real observation freshness, command bounds and read-only shadow execution."""
 
 import math
 import time
-
 import numpy as np
 import torch
-
-# Checkpoint contract: trained at 50Hz control/Dataset with one RGB feature named d435.
-CONTROL_HZ = 50
-CONTROL_PERIOD_S = 1 / CONTROL_HZ
-POLICY_CAMERA = "d435"
-IMAGE_FEATURE = f"observation.images.{POLICY_CAMERA}"
-
-
-def validate_action_processors(pre, post, joint_representation):
-    from lerobot.processor.relative_action_processor import (
-        RelativeActionsProcessorStep,
-        AbsoluteActionsProcessorStep,
-    )
-
-    masks = {"relative": [True] * 7, "absolute": [False] * 6 + [True]}
-    if joint_representation not in masks:
-        raise ValueError("joint representation must be relative or absolute")
-    relative = [s for s in pre.steps if isinstance(s, RelativeActionsProcessorStep)]
-    absolute = [s for s in post.steps if isinstance(s, AbsoluteActionsProcessorStep)]
-    names = [f"joint_{i}.pos" for i in range(1, 7)] + ["gripper.pos"]
-    if (
-        len(relative) != 1
-        or len(absolute) != 1
-        or not relative[0].enabled
-        or not absolute[0].enabled
-        or absolute[0].relative_step is not relative[0]
-        or relative[0].action_names != names
-        or relative[0]._build_mask(7) != masks[joint_representation]
-    ):
-        raise ValueError(
-            f"checkpoint processors do not match {joint_representation} joints and relative gripper"
-        )
-
-
-class ACTChunkPredictor:
-    """Single-threaded batch-one inference; never queue normalized relative actions."""
-
-    def __init__(self, model, preprocessor, postprocessor):
-        self.model = model
-        self.preprocessor = preprocessor
-        self.postprocessor = postprocessor
-        self.temporal_ensembler = None
-        self.temporal_ensemble_coeff = None
-        self.ensemble_updates = 0
-        self.n_action_steps = 1
-        self._chunk = None
-        self._next_chunk_index = 0
-        self.generation_state = None
-        self.generation_sequence = None
-        self._control_tick = 0
-        self._sparse_history = []
-        self.last_contributors = 1
-
-    def configure_action_steps(self, steps):
-        if type(steps) is not int or not 1 <= steps <= self.model.config.chunk_size:
-            raise ValueError("action steps must be an integer within the chunk horizon")
-        self.n_action_steps = steps
-        self.reset_execution()
-
-    def execution_chunk(self, image, state, sequence):
-        """Refresh only at the selected cadence; cached targets keep their old anchor."""
-        inferred = self._chunk is None or self._next_chunk_index >= self.n_action_steps
-        if inferred:
-            self._chunk = self.predict(image, state)
-            self._next_chunk_index = 0
-            self.generation_state = list(state)
-            self.generation_sequence = sequence
-        index = self._next_chunk_index
-        self._next_chunk_index += 1
-        return self._chunk, index, inferred
-
-    def configure_temporal_ensemble(self, coefficient):
-        from lerobot.policies.act.modeling_act import ACTTemporalEnsembler
-
-        if coefficient is not None and not math.isfinite(coefficient):
-            raise ValueError("temporal ensemble coefficient must be finite")
-        self.temporal_ensemble_coeff = coefficient
-        self.temporal_ensembler = (
-            None
-            if coefficient is None
-            else ACTTemporalEnsembler(
-                coefficient,
-                self.model.config.chunk_size,
-            )
-        )
-        self.reset_execution()
-
-    def reset_execution(self):
-        self.ensemble_updates = 0
-        self._chunk = None
-        self._next_chunk_index = 0
-        self.generation_state = self.generation_sequence = None
-        self._control_tick = 0
-        self._sparse_history = []
-        self.last_contributors = 1
-        if self.temporal_ensembler is not None:
-            self.temporal_ensembler.reset()
-
-    def select_target(self, absolute_chunk, *, chunk_index=0, new_chunk=True):
-        """Ensemble only after each entire chunk has been decoded at its own anchor."""
-        if self.temporal_ensembler is None:
-            return absolute_chunk[chunk_index].copy()
-        if self.n_action_steps > 1:
-            tick = self._control_tick
-            if new_chunk:
-                self._sparse_history.append((tick, absolute_chunk.copy()))
-                self.ensemble_updates += 1
-            self._sparse_history = [
-                (born, chunk) for born, chunk in self._sparse_history if tick - born < len(chunk)
-            ]
-            if not self._sparse_history:
-                raise ValueError("no time-aligned prediction for execution tick")
-            # Keep coefficient units in 20ms control steps, not inference calls.
-            oldest = self._sparse_history[0][0]
-            weights = np.exp(
-                -self.temporal_ensemble_coeff
-                * np.array([born - oldest for born, _ in self._sparse_history], dtype=np.float64)
-            )
-            candidates = np.stack([chunk[tick - born] for born, chunk in self._sparse_history])
-            target = np.average(candidates, axis=0, weights=weights).astype(absolute_chunk.dtype)
-            self.last_contributors = len(candidates)
-            self._control_tick += 1
-            return target
-        with torch.inference_mode():
-            target = self.temporal_ensembler.update(torch.from_numpy(absolute_chunk)[None])[0]
-        self.ensemble_updates += 1
-        self.last_contributors = min(self.ensemble_updates, len(absolute_chunk))
-        return target.numpy().copy()
-
-    @classmethod
-    def from_checkpoint(cls, checkpoint, *, joint_representation="relative"):
-        from .positive_act import PositiveACTConfig, PositiveACTPolicy
-        from lerobot.configs.policies import PreTrainedConfig
-        from lerobot.policies.factory import make_pre_post_processors
-
-        if not torch.cuda.is_available():
-            raise RuntimeError("controller policy requires CUDA")
-        cfg = PreTrainedConfig.from_pretrained(checkpoint)
-        if not isinstance(cfg, PositiveACTConfig) or cfg.temporal_ensemble_coeff is not None:
-            raise ValueError("requires the positive-gripper full-chunk checkpoint")
-        cfg.device = "cuda"
-        cfg.pretrained_backbone_weights = None  # All saved weights are loaded strictly below.
-        model = PositiveACTPolicy.from_pretrained(checkpoint, config=cfg, strict=True).eval()
-        pre, post = make_pre_post_processors(
-            cfg,
-            pretrained_path=str(checkpoint),
-            preprocessor_overrides={"device_processor": {"device": "cuda"}},
-        )
-        validate_action_processors(pre, post, joint_representation)
-        return cls(model, pre, post)
-
-    def predict(self, image, state):
-        state = np.asarray(state, dtype=np.float32)
-        shape = self.model.config.input_features[IMAGE_FEATURE].shape
-        if image.dtype != np.uint8 or image.shape != (shape[1], shape[2], shape[0]):
-            raise ValueError("policy requires checkpoint-shaped HWC RGB uint8 input")
-        if state.shape != (7,) or not np.isfinite(state).all():
-            raise ValueError("policy requires seven finite observed rad/m values")
-        batch = {
-            IMAGE_FEATURE: torch.from_numpy(image).permute(2, 0, 1).contiguous().float() / 255.0,
-            "observation.state": torch.from_numpy(state.copy()),
-        }
-        with torch.inference_mode():
-            relative = self.model.predict_action_chunk(self.preprocessor(batch))
-            # Consume the cached generation anchor NOW, before another preprocessor call.
-            absolute = self.postprocessor(relative)
-        chunk = absolute[0].detach().cpu().numpy().copy()
-        if chunk.shape != (self.model.config.chunk_size, 7) or not np.isfinite(chunk).all():
-            raise ValueError("invalid absolute ACT action chunk")
-        return chunk
+from piper_policy import policy_execution as policy_contract
 
 
 def verify_reference_inputs(predictor, path, safety, *, warmup=30):
@@ -187,10 +17,13 @@ def verify_reference_inputs(predictor, path, safety, *, warmup=30):
     with np.load(path) as data:
         images, states = data["images"], data["states"]
         expected = data["expected_absolute_chunks"]
+        seeds = data["seeds"] if "seeds" in data else None
     if len(states) == 0 or len(images) != len(states) or len(expected) != len(states):
         raise ValueError("reference inputs need matching, non-empty images/states/chunks")
     rows = []
     for i in range(len(states)):
+        if seeds is not None:
+            torch.manual_seed(int(seeds[i]))
         chunk = predictor.predict(images[i], states[i])
         delta = np.abs(chunk - expected[i])
         joint, grip = float(delta[:, :6].max()), float(delta[:, 6].max())
@@ -220,7 +53,45 @@ def check_policy_observation(telemetry, timing, now):
     return age
 
 
-def predict_candidate(predictor, observation, telemetry, timing, safety, clock=time.monotonic):
+def plan_policy_gripper(goal, feedback, control, epoch, settings, safety, now):
+    """Prepare the existing dispatch plan without advancing accepted reference state."""
+    from lerobot_robot_outcome_piper.gripper_reference import gripper_position_candidate
+
+    previous, revision = control.gripper_reference_snapshot(epoch)
+    target = control.gripper_target
+    if target is None:
+        target = feedback
+    reference = gripper_position_candidate(
+        previous,
+        target,
+        feedback,
+        goal,
+        settings,
+        now,
+        safety.gripper_lower,
+        safety.gripper_upper,
+    )
+    return dict(
+        feedback_m=feedback,
+        target_m=reference["target_m"],
+        base_revision=revision,
+        reference=reference,
+    )
+
+
+def predict_candidate(
+    predictor,
+    observation,
+    telemetry,
+    timing,
+    safety,
+    clock=time.monotonic,
+    record_action_chunk=False,
+    *,
+    control=None,
+    epoch=None,
+    gripper_reference_settings=None,
+):
     """One observation → absolute chunk → optional TE → checked target; sends nothing."""
     from lerobot_robot_outcome_piper.safety import ACTION_KEYS
     from lerobot_robot_outcome_piper.execution_constraints import check_execution_target
@@ -229,22 +100,71 @@ def predict_candidate(predictor, observation, telemetry, timing, safety, clock=t
     check_policy_observation(telemetry, timing, started)
     state = [float(observation[k]) for k in ACTION_KEYS]
     chunk, chunk_index, inferred = predictor.execution_chunk(
-        observation[POLICY_CAMERA],
+        observation[policy_contract.POLICY_CAMERA],
         state,
         telemetry["sequence"],
+        observed_monotonic_s=telemetry["observed_monotonic_s"],
     )
     predicted = clock()
     target = predictor.select_target(chunk, chunk_index=chunk_index, new_chunk=inferred)
+    recorded_prediction = {}
+    if record_action_chunk:
+        recorded_prediction = dict(
+            generation_observation_sequence=predictor.generation_sequence,
+            anchor=list(predictor.generation_state),
+            candidate_chunk_index=chunk_index,
+            inference_performed=inferred,
+            selected_target_rad_m=target.tolist(),
+            asynchronous_execution=getattr(predictor, "execution_details", None),
+        )
+        if inferred:
+            recorded_prediction["absolute_action_chunk_rad_m"] = chunk.tolist()
     try:
-        check_execution_target(state, target, safety)
+        if gripper_reference_settings is not None:
+            recorded_prediction["policy_goal_rad_m"] = target.tolist()
+            if control is None or epoch is None:
+                raise ValueError("policy gripper reference needs the current control epoch")
+            goal = float(target[6])
+            if (
+                getattr(predictor, "execution_details", {}).get("phase") == "initial_hold"
+                and control.gripper_target is not None
+            ):
+                goal = control.gripper_target
+            gripper_plan = plan_policy_gripper(
+                goal,
+                state[6],
+                control,
+                epoch,
+                gripper_reference_settings,
+                safety,
+                predicted,
+            )
+            target = np.asarray(target, dtype=np.float64).copy()
+            target[6] = gripper_plan["target_m"]
+            recorded_prediction.update(
+                gripper_plan=gripper_plan,
+                selected_target_rad_m=target.tolist(),
+            )
+        if control is None:
+            check_execution_target(state, target, safety)
+        else:
+            check_execution_target(
+                state,
+                target,
+                safety,
+                last_gripper_target=control.gripper_target,
+            )
     except ValueError as exc:
-        raise ValueError(
-            f"{exc}; observed_rad_m={state}; candidate_rad_m={target.tolist()}"
-        ) from exc
+        error = ValueError(f"{exc}; observed_rad_m={state}; candidate_rad_m={target.tolist()}")
+        if recorded_prediction:
+            error.policy_prediction = recorded_prediction
+        raise error from exc
     checked = clock()
     try:
         age = check_policy_observation(telemetry, timing, checked)
     except ValueError as exc:
+        if recorded_prediction:
+            exc.policy_prediction = recorded_prediction
         exc.policy_timing = {
             "input_age_before_prediction_s": started - telemetry["oldest_received_monotonic_s"],
             "inference_s": predicted - started,
@@ -254,6 +174,7 @@ def predict_candidate(predictor, observation, telemetry, timing, safety, clock=t
         }
         raise
     return dict(zip(ACTION_KEYS, map(float, target))), {
+        **recorded_prediction,
         "observation_sequence": telemetry["sequence"],
         "anchor": predictor.generation_state,
         "generation_observation_sequence": predictor.generation_sequence,
@@ -268,6 +189,7 @@ def predict_candidate(predictor, observation, telemetry, timing, safety, clock=t
         "temporal_ensemble_contributors": predictor.last_contributors
         if predictor.temporal_ensembler is not None
         else 1,
+        "asynchronous_execution": getattr(predictor, "execution_details", None),
     }
 
 

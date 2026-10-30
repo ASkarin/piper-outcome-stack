@@ -319,7 +319,7 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
             result.feedback_limit_events = self._feedback_limit_events
             return result
         except OutcomePiperIntentRejected as exc:
-            self.control.request_hold(str(exc))
+            self.control.request_protection_hold(str(exc))
             observation = self.transition[TransitionKey.OBSERVATION]
             result = OutcomePiperAction(
                 {k: float(observation[k]) for k in ACTION_KEYS},
@@ -368,8 +368,8 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
         xyz_delta, rotation_delta, gripper_delta = input_deltas(
             dict(zip(AXIS_KEYS, axes)),
             self.control.mode,
-            self.max_xyz_step_m,
-            self.max_rotation_step_rad,
+            self.max_xyz_step_m * self.control.input_scale,
+            self.max_rotation_step_rad * self.control.input_scale,
             self.max_gripper_step_m,
             self.control.translation_strategy,
         )
@@ -528,8 +528,8 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
                 self.control.orientation_target,
                 xyz_delta,
                 rotation_delta,
-                self.max_xyz_step_m,
-                self.max_rotation_step_rad,
+                self.max_xyz_step_m * self.control.input_scale,
+                self.max_rotation_step_rad * self.control.input_scale,
                 ReferenceSettings(**self.streaming_reference),
                 time.monotonic(),
                 lock_orientation=not wrist_priority,

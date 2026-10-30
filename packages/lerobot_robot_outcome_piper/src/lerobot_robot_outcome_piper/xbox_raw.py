@@ -292,8 +292,15 @@ def convert(raw_root, output, repo_id):
         if options.get(key) is not None:
             options[key] = cls(**options[key])
     from .xbox_recovery import audit_raw
+    from .demonstration_segments import segments_from_telemetry
 
     audit_raw(raw_root)
+    selection = segments_from_telemetry(raw_root)
+    if not selection["segments"]:
+        raise ValueError("capture has no eligible continuous demonstration segments")
+    by_episode = {}
+    for segment in selection["segments"]:
+        by_episode.setdefault(segment["source_episode_index"], []).append(segment)
     started = time.monotonic()
     ds = LeRobotDataset.create(
         repo_id,
@@ -307,10 +314,19 @@ def convert(raw_root, output, repo_id):
     try:
         for index, path, result in attempts:
             count = 0
+            eligible = by_episode.get(index, [])
+            segment_number = 0
             for line in (path / "frames.jsonl").open():
                 row = json.loads(line)
                 if row["frame_index"] != count:
                     raise ValueError("noncontiguous raw frames")
+                if segment_number >= len(eligible) or not (
+                    eligible[segment_number]["first_frame"]
+                    <= count
+                    < eligible[segment_number]["end_frame_exclusive"]
+                ):
+                    count += 1
+                    continue
                 frame = {
                     k: np.asarray(v, dtype=np.float32) if isinstance(v, list) else v
                     for k, v in row["values"].items()
@@ -323,9 +339,13 @@ def convert(raw_root, output, repo_id):
                 )
                 ds.add_frame(frame)
                 count += 1
+                if count == eligible[segment_number]["end_frame_exclusive"]:
+                    ds.save_episode()
+                    segment_number += 1
             if count != result["frames"]:
                 raise ValueError("raw frame count differs")
-            ds.save_episode()
+            if segment_number != len(eligible):
+                raise ValueError("eligible segment does not belong to raw episode")
     finally:
         ds.finalize()
     encoding_s = time.monotonic() - started
@@ -334,6 +354,8 @@ def convert(raw_root, output, repo_id):
     for path in (output / "telemetry").glob("*/raw_depth/*/*.npz"):
         compress_depth_file(path, "npz")
     compression_s = time.monotonic() - compression_started
+    selection["source_capture"] = str(raw_root.resolve())
+    write_json(output / "demonstration-segments.json", selection)
     loaded = LeRobotDataset(repo_id, root=output)
     audit = verify_telemetry(output, loaded)
     report = dict(
@@ -341,9 +363,11 @@ def convert(raw_root, output, repo_id):
         source=str(raw_root.resolve()),
         action_rule="actual_dispatched_target_or_retained_hold",
         **audit,
+        source_episodes=len(attempts),
+        excluded_wait_frames=selection["excluded_frames"],
         episodes_source=[
-            dict(episode_index=i, attempt=str(p.relative_to(raw_root)), frames=r["frames"])
-            for i, p, r in attempts
+            dict(s, attempt=str(attempts[s["source_episode_index"]][1].relative_to(raw_root)))
+            for s in selection["segments"]
         ],
         encoding_and_write_s=encoding_s,
         compression_s=compression_s,

@@ -45,7 +45,8 @@ def test_episode_commands_wait_for_hold_and_do_not_allow_pose_during_recording()
     assert ui.request == ("save", "failure", "slipped")
 
 
-def test_save_worker_keeps_loop_alive_and_prep_does_not_write_frames():
+@pytest.mark.parametrize("tasks", [None, {"1": "green left", "2": "blue right"}])
+def test_save_worker_keeps_loop_alive_and_prep_does_not_write_frames(tasks):
     c = TeleopControl()
     assert c.gripper_target is None
     events = {"exit_early": False}
@@ -59,6 +60,12 @@ def test_save_worker_keeps_loop_alive_and_prep_does_not_write_frames():
             phase = c.recording_phase
             if not c.hold_confirmed:
                 return None
+            if tasks and phase == "preparing" and audit.dataset.num_episodes < 2:
+                return str(audit.dataset.num_episodes + 1)
+            if tasks and phase == "recording":
+                return ""
+            if tasks and phase == "review":
+                return "1"
             if phase == "preparing" and "start" not in self.sent:
                 self.sent.add("start")
                 return "start p1"
@@ -112,6 +119,8 @@ def test_save_worker_keeps_loop_alive_and_prep_does_not_write_frames():
             phases.append(c.recording_phase)
             kw["teleop_action_processor"](({"hold": False, "neutral": True}, {}))
             if kw["dataset"] is not None:
+                if tasks:
+                    assert kw["single_task"] == tasks[str(audit.dataset.num_episodes + 1)]
                 audit.pending.append(1)
                 assert c.recording_phase == "recording"
             time.sleep(0.0001)
@@ -129,12 +138,13 @@ def test_save_worker_keeps_loop_alive_and_prep_does_not_write_frames():
 
     def acquire(epoch):
         assert c.recording_phase == "preparing" and epoch == c.epoch
-        assert c.gripper_target is None
+        if not tasks or audit.dataset.num_episodes == 0:
+            assert c.gripper_target is None
         c.gripper_target = 0.0
         return {"initialized": True}
 
     official = NS(record_loop=loop, VideoEncodingManager=Manager)
-    ds = NS(num_episodes=1, episode_time_s=60)
+    ds = NS(num_episodes=2 if tasks else 1, episode_time_s=60)
     run_interactive_episodes(
         official,
         dict(
@@ -146,10 +156,17 @@ def test_save_worker_keeps_loop_alive_and_prep_does_not_write_frames():
         ds,
         c,
         T(),
+        tasks=tasks,
+        position="B-layout1" if tasks else None,
     )
     assert phases.count("saving") > 3
-    assert audit.dataset.num_episodes == 1
+    assert audit.dataset.num_episodes == (2 if tasks else 1)
     assert any(k.get("task_outcome") == "success" for _, k in log)
+    if tasks:
+        for event in ("episode_started", "episode_outcome"):
+            rows = [k for a, k in log if a == (event,)]
+            assert [r["task"] for r in rows] == ["green left", "blue right"]
+            assert [r["task_id"] for r in rows] == ["1", "2"]
     assert c.recording_phase is None
 
 
@@ -293,3 +310,77 @@ def test_start_never_queues_with_active_inputs(raw):
             c,
             Terminal(["start P1"]),
         )
+
+
+def test_task_menu_shortcuts_keep_hold_checks_and_explicit_labels():
+    c = TeleopControl()
+    ui = EpisodeControls(
+        c,
+        {},
+        Terminal(["1", "1", "", "", "2 slipped"]),
+        lambda *a, **k: None,
+        tasks={"1": "green left"},
+        position="B-layout1",
+    )
+    ui.enter("preparing")
+    ui.poll()
+    assert ui.request is None
+    c.confirm_hold()
+    ui.poll()
+    assert ui.request == ("start",) and ui.task == "green left"
+    assert ui.position == "B-layout1" and ui.task_id == "1"
+    ui.enter("recording")
+    ui.poll()
+    assert ui.request == ("end",)
+    ui.enter("review")
+    c.confirm_hold()
+    ui.poll()
+    assert ui.request is None  # Blank cannot silently label a success.
+    ui.poll()
+    assert ui.request == ("save", "failure", "slipped")
+
+
+def test_task_menu_rejects_old_start_and_unknown_choice():
+    c = TeleopControl()
+    ui = EpisodeControls(
+        c,
+        {},
+        Terminal(["start P1", "5", "q"]),
+        lambda *a, **k: None,
+        tasks={"1": "green left"},
+        position="B-layout1",
+    )
+    ui.enter("preparing")
+    c.confirm_hold()
+    ui.poll()
+    assert ui.request is None
+    ui.poll()
+    assert ui.request is None
+    ui.poll()
+    assert ui.request == ("quit",)
+
+
+def test_task_progress_counts_outcomes_separately_and_shows_camera_layout(capsys):
+    c = TeleopControl()
+    ui = EpisodeControls(
+        c,
+        {},
+        Terminal([]),
+        lambda *a, **k: None,
+        tasks={"1": "green left", "2": "green right"},
+        position="B-layout2",
+        layout_description="六边形在上，绿色在下",
+        split="train",
+        task_goal=5,
+    )
+    ui.task_id = "1"
+    for outcome in ("success", "failure", "cancelled"):
+        ui.note_saved(outcome)
+    ui.task_id = "2"
+    ui.note_saved("success")
+    ui.enter("preparing")
+    text = capsys.readouterr().out
+    assert "B-layout2" in text and "六边形在上，绿色在下" in text
+    assert "保存3/5｜成功1 失败1 取消1" in text
+    assert "保存1/5｜成功1 失败0 取消0" in text
+    assert "本会话" in text and "相机画面" in text

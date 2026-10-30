@@ -29,7 +29,7 @@ class Input:
 
 
 def candidate(monkeypatch, change=None):
-    def predict(predictor, obs, *args):
+    def predict(predictor, obs, *args, **kwargs):
         target = {k: float(v) for k, v in obs.items() if k.endswith(".pos")}
         target["joint_1.pos"] += 0.005
         if change:
@@ -110,7 +110,7 @@ def test_model_error_or_interrupt_holds_then_latches(session, monkeypatch, error
     # Fake receive timestamps advance during the existing synchronous fault hold.
     session[3].auto = 0.001
 
-    def fail(*a):
+    def fail(*a, **kwargs):
         raise error
 
     monkeypatch.setattr("piper_outcome_stack.policy_motion.predict_candidate", fail)
@@ -214,3 +214,53 @@ def test_rgb_recording_preserves_post_inference_cancellation(session, monkeypatc
     row = rows[recorded[0]["row_index"]]
     assert row["phase"] == "candidate" and row["discarded"] == "input_changed_during_inference"
     assert recorded[0]["observation_sequence"] == row["input_telemetry"]["sequence"]
+
+
+def test_release_during_async_initial_hold_ends_without_model_action(session, monkeypatch):
+    settle(session)
+    raw = Input()
+
+    def waiting(predictor, obs, *args, **kwargs):
+        raw.hold = False
+        target = {k: float(v) for k, v in obs.items() if k.endswith(".pos")}
+        return target, {"asynchronous_execution": {"phase": "initial_hold"}}
+
+    monkeypatch.setattr("piper_outcome_stack.policy_motion.predict_candidate", waiting)
+    result, rows = trial(session, raw)
+    assert result["policy_actions_sent"] == 0
+    assert result["startup_hold_actions_sent"] == 0
+    assert result["hold_confirmed"]
+    assert result["end_reason"] == "input_changed_during_inference"
+
+
+def test_release_after_async_hold_is_counted_as_hold_not_policy_action(session, monkeypatch):
+    settle(session)
+    raw = Input()
+    original = raw.get_action
+    remaining = [None]
+
+    def poll():
+        value = original()
+        if remaining[0] is not None:
+            if remaining[0] == 0:
+                value["hold"] = False
+            else:
+                remaining[0] -= 1
+        return value
+
+    raw.get_action = poll
+
+    def waiting(predictor, obs, *args, **kwargs):
+        remaining[0] = 1
+        return (
+            {k: float(v) for k, v in obs.items() if k.endswith(".pos")},
+            {"asynchronous_execution": {"phase": "initial_hold"}},
+        )
+
+    monkeypatch.setattr("piper_outcome_stack.policy_motion.predict_candidate", waiting)
+    result, rows = trial(session, raw)
+    assert result["policy_actions_sent"] == 0
+    assert result["startup_hold_actions_sent"] == 1
+    assert result["hold_confirmed"]
+    assert result["end_reason"] == "operator_released_or_cancelled"
+    assert sum(r["phase"] == "policy_startup_hold_sent" for r in rows) == 1

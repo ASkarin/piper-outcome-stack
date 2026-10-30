@@ -27,6 +27,15 @@ def candidates(root, *, min_duration_s=1.0):
     else:
         import pyarrow.parquet as pq
 
+        mapping_path = root / "demonstration-segments.json"
+        mapping = {}
+        if mapping_path.exists():
+            for segment in json.loads(mapping_path.read_text())["segments"]:
+                for local in range(segment["frames"]):
+                    mapping[segment["episode_index"], local] = (
+                        segment["source_episode_index"],
+                        segment["first_frame"] + local,
+                    )
         for path in (root / "data").rglob("*.parquet"):
             table = pq.read_table(
                 path, columns=["episode_index", "frame_index", "observation.state"]
@@ -34,7 +43,10 @@ def candidates(root, *, min_duration_s=1.0):
             for ep, frame, state in zip(
                 table["episode_index"], table["frame_index"], table["observation.state"]
             ):
-                states[int(ep), int(frame)] = np.asarray(state)
+                key = (int(ep), int(frame))
+                if mapping_path.exists():
+                    key = mapping[key]
+                states[key] = np.asarray(state)
     groups = []
     segment = []
     key = None

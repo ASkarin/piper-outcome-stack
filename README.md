@@ -1,11 +1,15 @@
 # PiPER OutcomeStack
 
+2026-10-29阶段整合：两组SmolVLA fresh50k及RTC固定指令开发已收尾，56次累计原始24/29、平坦FM23/24成功，另3外部无效；批次背景、执行顺序和重复数的局限保留。共享策略源码统一为0.1.18，S2到达入口/插值配方与RTC/padding实现均进入版本管理。源码配方见[训练](experiments/smolvla_retrain_20261027/EXPERIMENT.md)与[RTC运行](experiments/smolvla_50k_rtc_20261027/README.md)，权威模型/原始数据在既有运行目录。项目截止2026-12-31，独立结果预测/失败检测研究已取消，见规划仓库当前修订。下方日期段保留历史语义。
+
+2026-10-17：当前实机ACT阶段收尾、四模型固定，准备阶段3必要SmolVLA与sim2real衔接。见[阶段交接](docs/reports/stage2_closeout_20261017.md)及[固定接口](docs/operations/stage2_interface_contract_20261017.md)。最新验证包含失败，不能称全项目验收完成。
+
 ## Current status and entry points (2026-09-29)
 
 | Area | State | Entry |
 |---|---|---|
 | Task A ACT baseline | 40k correction-mixed model; operator-reported complete pick/place at P1–P4, N1 failed; no measured success rate yet | [process record](docs/reports/ACT实机全过程记录_20260929.md) |
-| Policy execution | 50 Hz, re-infer every 3 steps, TE 0.01 on decoded absolute targets, SDK speed 75% | `infra/acceptance/piper_policy_trial.py run --position P1 ...` |
+| Policy execution | 50 Hz, inference every step with official ACT TE 0.01 on decoded absolute targets, SDK speed 75% (adopted 2026-09-30; P1–P4 successes were observed at 3 steps/inference) | `infra/acceptance/piper_policy_trial.py run --position P1 --n-action-steps 1 --temporal-ensemble-coeff 0.01 ...` |
 | Trial outcomes | Operator labels as sidecars; per-position rates with Wilson 95% intervals | `python -m piper_outcome_stack.policy_trials label\|summarize` |
 | Xbox capture | 50 Hz control/Dataset, 640×480 RGBD60, sealed raw → offline conversion | `piper record`, `piper convert SESSION` ([operator](infra/local-controller/operator/README.md)) |
 | Teach capture | Receive-only raw capture, offline N−1 conversion | [teach collection](docs/operations/piper_teach_collection.md) |
@@ -19,7 +23,7 @@ planning-only statements where they say so.
 Current operator default (approved 2026-09-20): piper record uses 50 Hz control/Dataset and 640×480 RGBD at 60 fps, with time-based gripper reference and incremental A/Y planning. Save seals raw data; piper convert SESSION creates the independent Dataset offline. See [operator shortcuts](infra/local-controller/operator/README.md). Historical 20 Hz datasets and teaching next-state labels retain their own provenance.
 
 PiPER OutcomeStack is a reproducible real-robot data, ACT/VLA training, deployment,
-evaluation, simulation/sim2real, and action-outcome stack for the standard PiPER. This repository is the
+evaluation and simulation/sim2real stack for the standard PiPER. This repository is the
 code and experiment-evidence source. The control repository holds the roadmap, current
 status, decisions, and canonical planning records.
 
@@ -148,8 +152,10 @@ rate. The full history, evidence and limits are in the
 - Execution: `infra/acceptance/piper_policy_trial.py` with `policy_execution.py`,
   `policy_motion.py`, `policy_startup.py` and `policy_rgb_recording.py`. Each chunk is
   decoded to absolute rad/m targets at its own anchor. Temporal ensembling (0.01) runs
-  on decoded targets at 50 Hz control time. The current setting re-infers every 3 steps at
-  SDK speed 75%. Enter-confirmed move to A, LB start/cancel, B stop, freshness, step and
+  on decoded targets at 50 Hz control time. The adopted setting (2026-09-30) infers at
+  every control step (`--n-action-steps 1`), the official ACT TE mode, at SDK speed 75%.
+  The operator-reported P1–P4 successes used 3 steps per inference; the per-step
+  setting is evaluated separately. Enter-confirmed move to A, LB start/cancel, B stop, freshness, step and
   workspace checks are unchanged. Automatic cyclic GC is deferred during motion.
 - `training.py`/`training_selection.py` select policy inputs and delegate to official
   LeRobot training. The per-run training, compression and resume scripts for the current
@@ -174,7 +180,7 @@ The maintained operator commissioning entry is `infra/acceptance/piper_joint_com
 
 ## MuJoCo S0/S1 simulation
 
-The approved first simulation implementation is available through `piper-outcome-stack sim`: independent `.venv-sim`, the pinned standard PiPER model, geometry checks, desktop pose display, and archived-feedback / commanded-servo replay. Follow [the simulation tutorial](docs/operations/piper_simulation.md).
+Simulation is maintained in the independent `piper-simulation` repository. Use its `piper-sim` command and isolated environment; see [repository boundaries and locations](docs/operations/piper_simulation.md).
 
 S0/S1 uses an illustrative uncalibrated table/camera and unidentified actuator settings. Recorded feedback excursions are preserved and reported; target validation remains strict. It does not import the real robot plugin or connect to CAN/camera/gamepad, train a policy, implement S2/S3, or deploy a formal release. Earlier planning-only statements above describe the previous approval stage; this S0/S1 scope has now been explicitly approved.
 
@@ -215,3 +221,9 @@ Xbox保留；新增`teach-record`只接收原始RGBD/关节/夹爪反馈，`teac
 ## Training development
 
 On `piper-training`, install needed tools directly and use a private editable environment. Code edits run after restarting the process; PRs, releases and image builds are not development prerequisites. Formal training records a fixed commit, actual environment and versioned data without requiring a merged PR or project release. See [the training workflow](infra/container/README.md) for setup, GPU commands and collaborator permissions.
+
+## 独立仿真模块（2026-10-04）
+
+仿真、模型资产、回放、专家采集及仿真训练评估位于独立 `piper-simulation` 仓库。Mac：`/Users/csming/Documents/CoderLife/piper-simulation`；训练机：`/workspace/projects/piper-simulation`。入口为其独立环境的 `piper-sim`，本项目不再提供 `sim` 子命令或 MuJoCo 安装选项。当前命令见新仓库 README；下文/历史文档的旧仿真命令仅对应迁移前快照。
+
+共享纯策略在 `packages/piper_policy`，版本 0.1.0；真实观测时效、限位检查、设备下发和真实数据业务仍在本项目。`uv sync --frozen --extra remote-training` 或 `--extra local-controller` 安装对应策略依赖。仿真仓库使用固定 wheel；数据通过显式 LeRobot v3 Dataset 路径交互，不自动混入真实训练。

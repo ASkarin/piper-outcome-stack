@@ -1144,16 +1144,26 @@ class OutcomePiper(Robot):
         ):
             return False
         if self._running_epoch != action.epoch:
+            center_resume = action.intent == "run" and self._teleop.consume_center_resume(
+                action.epoch, self._running_epoch
+            )
             joints, _ = self._feedback()
-            if not self._teleop.hold_confirmed or any(
-                abs(a - b) > self._hold_settings.joint_tolerance_rad
-                for a, b in zip(joints, self._hold_window.target, strict=True)
+            # A brief stick center preserves the existing LB permission. Every
+            # new permission still needs the ordinary confirmed stable hold.
+            if not center_resume and (
+                not self._teleop.hold_confirmed
+                or any(
+                    abs(a - b) > self._hold_settings.joint_tolerance_rad
+                    for a, b in zip(joints, self._hold_window.target, strict=True)
+                )
             ):
                 self._teleop.request_hold()
                 self._hold_epoch = self._teleop.epoch
                 self._hold_window.restart(self._monotonic())
                 return False
             self._running_epoch = action.epoch
+            if center_resume:
+                self.last_action_telemetry["center_resume"] = True
             if action.intent == "pose":
                 logging.info("[预设姿态执行中] 持续按住LB；松LB或偏转摇杆/扳机取消。")
             else:
@@ -1218,7 +1228,7 @@ class OutcomePiper(Robot):
                     )
                 except OutcomePiperIntentRejected as exc:
                     self.last_action_telemetry["rejection_reason"] = str(exc)
-                    self._teleop.request_hold()
+                    self._teleop.request_protection_hold(str(exc))
                     self._start_hold_locked()
                     self.last_action_telemetry["commands"].append(dict(self._hold_command))
                     self._update_hold_locked()
@@ -1227,6 +1237,7 @@ class OutcomePiper(Robot):
                         self._dispatch_gripper_locked(target)
                         self._hold_id += 1  # New joint/gripper reference pair, same joint command.
                         self._raise_if_emergency_stop_requested_locked()
+                        self._teleop.complete_protection_recovery()
             if (
                 center_tick
                 and not self._input_fault_requested.is_set()
@@ -1483,7 +1494,10 @@ class OutcomePiper(Robot):
 
     def send_action(self, action: dict[str, Any]) -> dict[str, float]:
         if self.control_trace is None:
-            return self._send_action(action)
+            try:
+                return self._send_action(action)
+            finally:
+                self._update_operator_metadata()
         started = self._monotonic()
         result = "raised"
         try:
@@ -1491,6 +1505,7 @@ class OutcomePiper(Robot):
             result = "returned"
             return returned
         finally:
+            self._update_operator_metadata()
             self.control_trace.append(
                 {
                     "event": "action",
@@ -1507,6 +1522,14 @@ class OutcomePiper(Robot):
                     "teleop_state": None if self._teleop is None else self._teleop.state.value,
                     "telemetry": self.last_action_telemetry,
                 }
+            )
+
+    def _update_operator_metadata(self):
+        if self._teleop is not None and self.last_action_telemetry is not None:
+            self.last_action_telemetry.update(
+                precision=self._teleop.precision,
+                input_scale=self._teleop.input_scale,
+                demonstration_pause=self._teleop.demonstration_snapshot(),
             )
 
     def _send_action(self, action: dict[str, Any], *, joints_only=False) -> dict[str, float]:
@@ -1582,7 +1605,7 @@ class OutcomePiper(Robot):
             except OutcomePiperIntentRejected as exc:
                 if self._teleop is None:
                     raise
-                self._teleop.request_hold()
+                self._teleop.request_protection_hold(str(exc))
                 self.last_action_telemetry["rejection_reason"] = str(exc)
                 return self._teleop_idle_locked(action)
             except Exception as exc:
@@ -1655,6 +1678,8 @@ class OutcomePiper(Robot):
                 gripper_commanded=not joints_only,
                 retained_gripper_command=self._last_gripper_command,
             )
+            if self._teleop is not None:
+                self._teleop.complete_protection_recovery()
             return {key: float(action[key]) for key in (JOINT_KEYS if joints_only else ACTION_KEYS)}
 
     def prepare_recording_gripper(self, epoch):

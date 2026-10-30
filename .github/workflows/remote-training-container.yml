@@ -21,24 +21,6 @@ env:
   UV_VERSION: 0.11.32
 
 jobs:
-  simulation:
-    name: simulation-s0-s1
-    runs-on: ubuntu-24.04
-    env:
-      UV_PROJECT_ENVIRONMENT: .venv-sim
-      MUJOCO_GL: egl
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
-        with:
-          version: ${{ env.UV_VERSION }}
-      - name: Install headless Mesa rendering libraries
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1 libgl1-mesa-dri
-      - name: Install isolated simulation environment
-        run: bash infra/simulation/setup.sh
-      - name: Validate simulation geometry, replay and hardware isolation
-        run: .venv-sim/bin/python -m pytest -q tests/test_simulation.py
-
   validate:
     name: validate
     runs-on: ubuntu-24.04
@@ -65,7 +47,7 @@ jobs:
           done
           exit 1
       - name: Run project tests
-        run: uv run --no-sync pytest
+        run: uv run --no-sync pytest tests packages/piper_policy/tests
       - name: Smoke-test LeRobot Dataset finalize, reload, and replay
         shell: bash
         run: |
@@ -126,10 +108,15 @@ jobs:
               assert direct_url["vcs_info"]["commit_id"] == commit
           PIPER_PLUGIN_IDENTITY
           uv run --no-sync pytest tests/test_xbox_hold_commission.py tests/test_xbox_pause.py tests/test_xbox_input.py tests/test_cli_config.py tests/test_joint_commission.py tests/test_motion_preflight.py tests/test_plugin.py tests/test_capture_timing.py tests/test_recording_telemetry.py tests/test_piper_read_only_cycles.py tests/test_piper_read_only_probe.py tests/test_local_controller_policy.py tests/test_robot_doctor.py
-      - name: Install the runner's SocketCAN test module
+      - name: Ensure the runner's SocketCAN test module
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          # New Ubuntu kernels include these modules in linux-modules itself.
+          # Install extras only when the running kernel does not already provide vcan.
+          if ! modinfo vcan >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          fi
+          sudo modprobe vcan
       - name: Verify SocketCAN namespace isolation
         run: bash infra/local-controller/acceptance/can-namespace-smoke.sh
       - name: Validate the no-hardware host doctor report
@@ -246,7 +233,7 @@ jobs:
     name: publish-image
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_image }}
     runs-on: ubuntu-24.04
-    needs: [validate, simulation, local-controller-integration, container]
+    needs: [validate, local-controller-integration, container]
     permissions:
       contents: read
       packages: write

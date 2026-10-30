@@ -33,16 +33,53 @@ class TerminalCommands:
 
 
 class EpisodeControls:
-    def __init__(self, control, events, terminal, emit, *, work_available=False, duration_s=None):
+    def __init__(
+        self,
+        control,
+        events,
+        terminal,
+        emit,
+        *,
+        work_available=False,
+        duration_s=None,
+        tasks=None,
+        position=None,
+        layout_description=None,
+        split=None,
+        task_goal=None,
+    ):
         self.control, self.events, self.terminal, self.emit = control, events, terminal, emit
         self.phase = None
         self.request = None
         self.job = None
         self.preparation = None
-        self.position = None
+        self.position = position
+        self.tasks = tasks or {}
+        self.layout_description = layout_description
+        self.split = split
+        self.task_goal = task_goal
+        self.task_counts = {k: dict(success=0, failure=0, cancelled=0) for k in self.tasks}
+        self.task_id = None
+        self.task = None
         self.start_epoch = None
         self.work_available = work_available
         self.duration_s = duration_s
+        self.last_status = None
+
+    def task_progress(self):
+        rows = ["[本会话任务进度] 失败/取消不计为成功示范；重启后本会话计数重新开始。"]
+        for key, task in self.tasks.items():
+            counts = self.task_counts[key]
+            saved = sum(counts.values())
+            goal = "" if self.task_goal is None else f"/{self.task_goal}"
+            rows.append(
+                f"{key}：{task} 保存{saved}{goal}｜成功{counts['success']} "
+                f"失败{counts['failure']} 取消{counts['cancelled']}"
+            )
+        return "\n".join(rows)
+
+    def note_saved(self, outcome):
+        self.task_counts[self.task_id][outcome] += 1
 
     def enter(self, phase):
         self.phase = self.control.recording_phase = phase
@@ -69,18 +106,123 @@ class EpisodeControls:
             "saving": "[保存中] 不接受遥操作，请等待。B急停仍有效；返回准备阶段才可继续。",
             "finalizing": "[正在退出] 正在完成数据收尾，请等待；B急停仍有效。",
         }
+        if phase == "preparing" and self.tasks:
+            messages[phase] = (
+                f"[准备] 布局 {self.position}｜{pose_keys}。\n"
+                + (f"{self.layout_description}\n" if self.layout_description else "")
+                + (f"本会话用途：{self.split}\n" if self.split else "")
+                + self.task_progress()
+                + "\n"
+                + "松开LB并回中，等待保持确认；复位两个物块，再输入任务编号开始：\n"
+                + "\n".join(f"{key}：{task}" for key, task in self.tasks.items())
+                + "\nq：退出并保留已保存回合。左右以固定相机画面为准。"
+            )
+        if phase == "recording":
+            messages[phase] += "\n回车也可结束本回合。"
+            messages[phase] += (
+                "\n松LB自动暂停示范数据；重新按LB操作时自动恢复。任务需要保持时按住LB并让摇杆回中。"
+            )
+            if self.tasks:
+                messages[phase] += (
+                    f"\n布局 {self.position}｜任务 {self.task_id}：{self.task}（相机画面左/右）"
+                )
+        if phase == "review":
+            messages[phase] = (
+                "[录制结束] 松开LB并回中，保持确认后输入：\n"
+                "1：保存成功；2 [备注]：保存失败；3 [备注]：保存取消。\n"
+                "r：放弃重录；q：放弃本次并退出。回车不作决定。"
+            )
         operator_message(messages[phase])
+        if phase == "preparing":
+            operator_message("fine / normal：松LB、回中并保持确认后选择精细/常规档。")
         if phase == "preparing" and self.control.gripper_target is None:
             operator_message(
-                "首次 start 会按当前合法宽度接管夹爪，并施加配置的保持力；无需先按扳机。",
+                ("首次选择任务" if self.tasks else "首次 start")
+                + "会按当前合法宽度接管夹爪，并施加配置的保持力；无需先按扳机。",
             )
 
-    def poll(self):
+    def show_status(self, raw, observation, safety=None):
+        """Report eligibility/protection changes, without refreshing live motion."""
+        if self.phase not in ("preparing", "recording"):
+            return
+        state = self.control.demonstration_snapshot()
+        recovery = None
+        if state["protection_reason"]:
+            if self.control.state in (TeleopState.FAULT, TeleopState.E_STOP):
+                recovery = "故障/急停会话已锁存，请按既有流程处理"
+            elif raw.get("hold", True):
+                recovery = "请松开LB"
+            elif not raw.get("neutral", False):
+                recovery = "请让摇杆/扳机回中"
+            elif not self.control.hold_confirmed:
+                recovery = "正在确认保持"
+            else:
+                recovery = "保持已确认；重新按LB后执行合法的区域内动作或夹爪动作"
+        status = (
+            self.phase,
+            self.control.precision,
+            state["manual"],
+            state["protection_reason"],
+            recovery,
+        )
+        if status == self.last_status:
+            return
+        self.last_status = status
+        detail = (
+            "准备中，尚未录制"
+            if self.phase == "preparing"
+            else "保护等待不进入训练"
+            if state["protection_reason"]
+            else "LB许可未开启，原始录制保留、示范暂停"
+            if state["manual"]
+            else "示范记录有效"
+        )
+        parts = [
+            f"[状态] {'精细50%' if self.control.precision == 'fine' else '常规100%'}",
+            self.control.state.value,
+            detail,
+        ]
+        if safety is not None and safety.workspace_geometry is not None:
+            from pyAgxArm.utiles.mdh_kinematics import fk_from_mdh, get_mdh
+            from .safety import ACTION_KEYS
+            from .workspace import workspace_coordinates
+
+            pose = fk_from_mdh(list(get_mdh("piper")), [observation[k] for k in ACTION_KEYS[:6]])
+            height = min(
+                workspace_coordinates(pose, observation["gripper.pos"], safety.workspace_geometry)[
+                    2:
+                ]
+            )
+            parts.append(
+                f"计算工具间隙 {height * 1000:.1f}mm（下限 {safety.workspace_lower[2] * 1000:g}mm）"
+            )
+        if state["protection_reason"]:
+            elapsed = time.monotonic() - state["protection_started_s"]
+            parts.append(f"保护 {elapsed:.1f}s：{state['protection_reason']}")
+            parts.append(recovery)
+        operator_message("｜".join(parts))
+
+    @staticmethod
+    def _input_interlock(raw):
+        if raw is None:
+            raise ValueError("切换需要当前手柄状态")
+        return dict(
+            hold=raw["hold"],
+            neutral=raw["neutral"],
+            conflicting=any(
+                raw.get(k, False) for k in ("mode_switch", "translation_switch", "home", "work")
+            ),
+        )
+
+    def poll(self, raw=None):
         if self.preparation is not None and self.preparation.done():
             self.preparation.result()
             self.preparation = None
             if self.phase == "preparing":
-                operator_message("[文件准备完成] 保持确认并回中后可输入 start。")
+                operator_message(
+                    "[文件准备完成] 保持确认并回中后可"
+                    + ("输入任务编号开始。" if self.tasks else "输入 start。")
+                )
         if self.job is not None:
             if self.terminal.poll() is not None:
                 operator_message("[请等待] 正在保存或收尾，不接受其他命令；B急停仍有效。")
@@ -92,8 +234,37 @@ class EpisodeControls:
         line = self.terminal.poll()
         if line is None:
             return
+        # Shortcuts enter the same state/hold checks as the full commands.
+        if self.phase == "recording" and line == "":
+            line = "end"
+        elif self.phase in ("preparing", "review") and line == "q":
+            line = "quit"
+        elif self.phase == "review":
+            shortcut = line.split(maxsplit=1)
+            if shortcut and shortcut[0] in ("1", "2", "3"):
+                outcome = {"1": "success", "2": "failure", "3": "cancelled"}[shortcut[0]]
+                line = "save " + outcome + (" " + shortcut[1] if len(shortcut) == 2 else "")
+            elif line == "r":
+                line = "redo"
+        selected_task = self.phase == "preparing" and line in self.tasks
+        if selected_task:
+            selected_id = line
+            line = "start " + self.position
         parts = line.split(maxsplit=2)
         if not parts:
+            return
+        if self.phase == "preparing" and line in ("fine", "normal"):
+            try:
+                self.control.select_precision(line, **self._input_interlock(raw))
+            except ValueError as exc:
+                operator_message(f"[未切换] {exc}。")
+            else:
+                self.emit(
+                    "precision_selected", precision=line, input_scale=self.control.input_scale
+                )
+                operator_message(
+                    f"[档位] {'精细50%' if line == 'fine' else '常规100%'}；夹爪和A/Y预设速度保持原配置。"
+                )
             return
         ready = self.control.hold_confirmed and self.control.state in (
             TeleopState.WAITING,
@@ -101,11 +272,20 @@ class EpisodeControls:
             TeleopState.CENTERED,
         )
         request = None
-        if self.phase == "preparing" and parts[0] == "start" and len(parts) == 2 and ready:
+        if (
+            self.phase == "preparing"
+            and parts[0] == "start"
+            and len(parts) == 2
+            and ready
+            and (not self.tasks or selected_task)
+        ):
             if self.preparation is not None and not self.preparation.done():
                 operator_message("[准备中] 正在准备本回合文件，请稍后重新输入 start；B急停仍有效。")
                 return
             self.position = parts[1]
+            if selected_task:
+                self.task_id = selected_id
+                self.task = self.tasks[selected_id]
             request = ("start",)
         elif self.phase == "recording" and line == "end":
             request = ("end",)
@@ -134,7 +314,10 @@ class EpisodeControls:
             }
             if parts[0] not in allowed.get(self.phase, set()):
                 hint = (
-                    "录制中请先输入 end 结束本回合。"
+                    "录制中用LB暂停/恢复示范，无需输入pause/resume；档位在准备阶段选择，end结束回合。"
+                    if self.phase == "recording"
+                    and parts[0] in ("fine", "normal", "pause", "resume")
+                    else "录制中请先输入 end 结束本回合。"
                     if self.phase == "recording"
                     else "请使用上方列出的当前阶段命令。"
                 )
@@ -150,13 +333,28 @@ class EpisodeControls:
                     if parts[0] == "save"
                     else "该命令无需附加参数。"
                 )
+            if self.tasks and self.phase == "preparing" and ready:
+                hint = "复位物块后输入上方任务编号；q退出。"
             operator_message(f"[未执行] {hint}")
             return
         self.request = request
         self.events["exit_early"] = True
 
 
-def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=None):
+def run_interactive_episodes(
+    official,
+    loop_args,
+    audit,
+    ds,
+    control,
+    terminal=None,
+    *,
+    tasks=None,
+    position=None,
+    layout_description=None,
+    split=None,
+    task_goal=None,
+):
     """SDK traffic remains in the ordinary loop; workers only save/discard/finalize."""
     terminal = TerminalCommands() if terminal is None else terminal
     teleop_config = getattr(loop_args.get("teleop"), "config", None)
@@ -167,6 +365,11 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
         audit.emit,
         work_available=getattr(teleop_config, "work_pose_button", None) is not None,
         duration_s=getattr(ds, "episode_time_s", None),
+        tasks=tasks,
+        position=position,
+        layout_description=layout_description,
+        split=split,
+        task_goal=task_goal,
     )
     processor = loop_args["teleop_action_processor"]
 
@@ -177,8 +380,13 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
 
             with span("terminal_and_writer_check"):
                 audit.check_writer()
-                ui.poll()
+                ui.poll(value[0])
         result = processor(value)
+        ui.show_status(
+            value[0],
+            value[1],
+            getattr(processor.steps[0], "safety", None) if hasattr(processor, "steps") else None,
+        )
         if ui.request == ("start",):
             raw = value[0]
             if (
@@ -242,11 +450,16 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
                     operator_message(f"[未开始] {exc}；请调整后重新输入 start。")
                     continue
                 audit.emit("recording_gripper_reference", **reference)
+                if tasks:
+                    args["single_task"] = ui.task
                 audit.emit(
                     "episode_started",
                     episode_index=audit.dataset.num_episodes,
                     attempt=audit.attempt,
                     position_id=ui.position,
+                    intended_split=split,
+                    task_id=ui.task_id,
+                    task=ui.task if tasks else loop_args.get("single_task"),
                 )
                 loop("recording", recording=True)
                 loop("review")
@@ -266,6 +479,9 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
                     episode_index=index,
                     attempt=attempt,
                     position_id=ui.position,
+                    intended_split=split,
+                    task_id=ui.task_id,
+                    task=ui.task if tasks else loop_args.get("single_task"),
                     task_outcome=request[1],
                     note=request[2],
                 )
@@ -279,6 +495,9 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
                             episode_index=index,
                             attempt=attempt,
                             position_id=ui.position,
+                            intended_split=split,
+                            task_id=ui.task_id,
+                            task=ui.task if tasks else loop_args.get("single_task"),
                             task_outcome=request[1],
                             note=request[2],
                             data_valid=True,
@@ -290,6 +509,8 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
                 save_elapsed = time.monotonic() - save_started
                 if frames:
                     count += 1
+                    if tasks:
+                        ui.note_saved(request[1])
                     operator_message(
                         f"[原始回合已保存] 本次第 {count} 回合｜{frames} 帧｜封存 {save_elapsed:.1f} 秒。可开始下一起点。",
                     )
@@ -298,6 +519,8 @@ def run_interactive_episodes(official, loop_args, audit, ds, control, terminal=N
                         "[未保存] 本回合没有可用数据；返回准备阶段后重新输入 start。",
                     )
 
+            if tasks:
+                operator_message(ui.task_progress())
             job("finalizing", audit.dataset.finalize)
         finally:
             control.recording_phase = None

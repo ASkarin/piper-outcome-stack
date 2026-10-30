@@ -1,4 +1,4 @@
-"""One operator-controlled ACT segment using PiPER's existing hold/stop lifecycle."""
+"""One operator-controlled policy segment using PiPER's existing hold/stop lifecycle."""
 
 import math
 import time
@@ -8,7 +8,8 @@ from lerobot_robot_outcome_piper.processor import OutcomePiperAction
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.teleop_control import TeleopState
 
-from .policy_execution import CONTROL_PERIOD_S, POLICY_CAMERA, predict_candidate
+from piper_policy.policy_execution import CONTROL_PERIOD_S, POLICY_CAMERA
+from .policy_execution import predict_candidate
 
 
 class PolicyInput:
@@ -82,6 +83,10 @@ def _run_policy_trial(
     max_actions=None,
     max_run_s=None,
     frame_recorder=None,
+    record_action_chunks=False,
+    completion_detector=None,
+    candidate_fn=None,
+    gripper_reference_settings=None,
     clock=time.monotonic,
     sleep=time.sleep,
 ):
@@ -90,20 +95,24 @@ def _run_policy_trial(
         max_run_s is not None and (not math.isfinite(max_run_s) or max_run_s <= 0)
     ):
         raise ValueError("trial budgets must be positive")
+    if completion_detector is not None:
+        completion_detector.reset()
     inputs = PolicyInput(teleop, robot)
     robot.camera_input_poll = inputs.poll
-    sent, first_dispatch, ready_announced = 0, None, False
+    sent, startup_holds, first_dispatch, ready_announced = 0, 0, None, False
     observation = None
     reason = None
     while reason is None:
         start = clock()
         raw = inputs.poll()
         intent, epoch = control.observe(raw["hold"], raw["neutral"])
-        if first_dispatch is not None:
+        if first_dispatch is not None or startup_holds:
             if not raw["hold"]:
                 reason = "operator_released_or_cancelled"
             elif (max_actions is not None and sent >= max_actions) or (
-                max_run_s is not None and clock() - first_dispatch >= max_run_s
+                max_run_s is not None
+                and first_dispatch is not None
+                and clock() - first_dispatch >= max_run_s
             ):
                 reason = "segment_budget_reached"
             if reason is not None:
@@ -134,18 +143,51 @@ def _run_policy_trial(
                     },
                     clock(),
                 )
+            if completion_detector is not None:
+                from .policy_execution import check_policy_observation
+
+                telemetry = robot.last_observation_telemetry
+                check_policy_observation(telemetry, robot.config.capture_timing, clock())
+                camera = telemetry["cameras"][POLICY_CAMERA]
+                completion = completion_detector.update(
+                    observation[POLICY_CAMERA],
+                    observation["gripper.pos"],
+                    clock(),
+                    camera["frame_number"],
+                )
+                row["completion"] = completion
+                if completion is not None and completion["candidate_complete"]:
+                    check_policy_observation(telemetry, robot.config.capture_timing, clock())
+                    new_raw = inputs.poll()  # B and operator cancellation still take precedence.
+                    new_intent, new_epoch = control.observe(new_raw["hold"], new_raw["neutral"])
+                    if new_intent != "run" or new_epoch != epoch:
+                        reason = "input_changed_during_completion_check"
+                    else:
+                        reason = "placement_completion_candidate"
+                        print(
+                            "[收尾] 物块位于放置区，夹爪已张开且画面持续稳定。\n停止策略并确认当前位置保持；请人工确认本轮任务结果。",
+                            flush=True,
+                        )
+                    row.update(phase="completion_stop", end_reason=reason)
+                    break
             generated = clock()
             try:
-                target, details = predict_candidate(
+                target, details = (candidate_fn or predict_candidate)(
                     predictor,
                     observation,
                     robot.last_observation_telemetry,
                     robot.config.capture_timing,
                     safety,
                     clock,
+                    record_action_chunks,
+                    control=control,
+                    epoch=epoch,
+                    gripper_reference_settings=gripper_reference_settings,
                 )
             except ValueError as exc:
                 row.update(phase="candidate_rejected", error=str(exc))
+                if hasattr(exc, "policy_prediction"):
+                    row["prediction"] = exc.policy_prediction
                 if hasattr(exc, "policy_timing"):
                     row["prediction_failure_timing"] = exc.policy_timing
                 raise
@@ -162,16 +204,24 @@ def _run_policy_trial(
                 row["discarded"] = reason
                 break
             action = OutcomePiperAction(target, intent="run", epoch=epoch)
+            action.gripper_plan = details.get("gripper_plan")
             action.generated_monotonic_s = generated
-            if first_dispatch is None:
+            startup_hold = (details.get("asynchronous_execution") or {}).get(
+                "phase"
+            ) == "initial_hold"
+            if first_dispatch is None and not startup_hold:
                 first_dispatch = clock()
             robot.send_action(action)
             row["sdk"] = deepcopy(robot.last_action_telemetry)
             if row["sdk"]["result"] != "sdk_returned":
                 reason = "dispatch_rejected"
                 break
-            sent += 1
-            row.update(phase="policy_sent", policy_action_index=sent)
+            if startup_hold:
+                startup_holds += 1
+                row.update(phase="policy_startup_hold_sent")
+            else:
+                sent += 1
+                row.update(phase="policy_sent", policy_action_index=sent)
         else:
             robot.send_action(hold_action(observation, control, clock))
             row["sdk"] = deepcopy(robot.last_action_telemetry)
@@ -188,6 +238,7 @@ def _run_policy_trial(
         status="segment_ended_held",
         end_reason=reason,
         policy_actions_sent=sent,
+        startup_hold_actions_sent=startup_holds,
         gripper_completion="command_only",
         hold_confirmed=control.hold_confirmed,
     )

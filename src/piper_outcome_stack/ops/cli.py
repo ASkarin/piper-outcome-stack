@@ -33,7 +33,6 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("replay", add_help=False)
     commands.add_parser("train", add_help=False)
     commands.add_parser("prepare-training", add_help=False)
-    commands.add_parser("sim", add_help=False)
     commands.add_parser("xbox-input", add_help=False)
     commands.add_parser("xbox-preview", add_help=False)
     commands.add_parser("capture-timing", add_help=False)
@@ -111,10 +110,6 @@ def main(argv: list[str] | None = None) -> int:
 
         train_main(raw_args[1:])
         return 0
-    if raw_args and raw_args[0] == "sim":
-        from piper_outcome_stack.sim.cli import main as sim_main
-
-        return sim_main(raw_args[1:])
     if raw_args and raw_args[0] in {"teleoperate", "record", "replay"}:
         from lerobot_robot_outcome_piper.cli import record_main, teleoperate_main, replay_main
 

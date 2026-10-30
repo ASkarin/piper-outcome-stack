@@ -84,6 +84,11 @@ def test_official_cli_parses_complete_config_before_workflow(tmp_path, monkeypat
             teleop[key] = str(teleop[key])
     config = dict(robot=values, teleop=teleop, display_data=False)
     if workflow == "record":
+        config["recording_tasks"] = {"1": "把绿色方块放到左区。", "4": "把天蓝色六边形块放到右区。"}
+        config["recording_position"] = "B-layout2"
+        config["recording_layout_description"] = "六边形在上，绿色在下"
+        config["recording_split"] = "development"
+        config["recording_task_goal"] = 1
         config["dataset"] = dict(
             repo_id="test/parser",
             single_task="parser only",
@@ -106,3 +111,9 @@ def test_official_cli_parses_complete_config_before_workflow(tmp_path, monkeypat
     assert set(parsed.robot.cameras) == {"d435"}
     assert parsed.robot.capture_timing.joint_max_skew_s == 0.02
     assert parsed.teleop.control_hz == 30
+
+    if workflow == "record":
+        assert parsed.recording_tasks == config["recording_tasks"]
+        assert parsed.recording_position == "B-layout2"
+        assert parsed.recording_split == "development"
+        assert parsed.recording_task_goal == 1

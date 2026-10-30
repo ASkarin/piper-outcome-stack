@@ -9,13 +9,8 @@ description = "A reproducible PiPER learning stack with action-outcome evaluatio
 requires-python = ">=3.12,<3.13"
 
 [project.optional-dependencies]
-simulation = [
-    "mujoco==3.12.0",
-    "numpy>=2,<3",
-    "scipy>=1.16,<2",
-    "pillow>=11,<13",
-]
 local-controller = [
+    "piper-policy",
     "lerobot_robot_outcome_piper",
     "lerobot[core-scripts,gamepad,intelrealsense,smolvla] @ git+https://github.com/huggingface/lerobot.git@30da8e687a6dfc617fcd94afc367ac7071c376ce ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "pyAgxArm @ git+https://github.com/agilexrobotics/pyAgxArm.git@799b8412fbe8b9156bc9892d3dbeb2df7e98be71 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -24,6 +19,7 @@ local-controller = [
     "torchvision==0.26.0+cu128 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 remote-training = [
+    "piper-policy",
     "lerobot[smolvla,training] @ git+https://github.com/huggingface/lerobot.git@30da8e687a6dfc617fcd94afc367ac7071c376ce ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "tensorboard==2.21.0 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torch==2.11.0+cu128 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -34,7 +30,7 @@ remote-training = [
 piper-outcome-stack = "piper_outcome_stack.ops.cli:main"
 
 [tool.uv.workspace]
-members = ["packages/lerobot_robot_outcome_piper"]
+members = ["packages/lerobot_robot_outcome_piper", "packages/piper_policy"]
 
 [dependency-groups]
 dev = [
@@ -62,6 +58,7 @@ required-environments = [
 ]
 
 [tool.uv.sources]
+piper-policy = { workspace = true }
 lerobot-robot-outcome-piper = { workspace = true }
 torch = [
     { index = "pytorch-cu128", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },

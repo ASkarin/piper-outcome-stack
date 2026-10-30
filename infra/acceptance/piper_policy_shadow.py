@@ -9,13 +9,8 @@ import time
 import numpy as np
 import torch
 
-from piper_outcome_stack.policy_execution import (
-    CONTROL_HZ,
-    POLICY_CAMERA,
-    ACTChunkPredictor,
-    run_shadow,
-    verify_reference_inputs,
-)
+from piper_policy.policy_execution import CONTROL_HZ, POLICY_CAMERA, ACTChunkPredictor
+from piper_outcome_stack.policy_execution import run_shadow, verify_reference_inputs
 
 
 def metrics(values):
