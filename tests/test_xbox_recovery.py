@@ -9,7 +9,7 @@ from lerobot_robot_outcome_piper.xbox_raw import RawFrames
 from lerobot_robot_outcome_piper.xbox_recovery import recover_sealed, audit_raw
 
 
-def failed_capture(tmp_path, outcome=True):
+def failed_capture(tmp_path, outcome=True, **save_fields):
     raw = RawFrames(tmp_path / "raw", fps=20, features={}, robot_type="outcome_piper")
     robot = NS(config=NS(), last_depth_frames={})
     audit = TelemetryDataset(raw, robot)
@@ -33,6 +33,7 @@ def failed_capture(tmp_path, outcome=True):
             attempt=0,
             position_id="P1",
             task_outcome="success",
+            **save_fields,
         )
     audit.save_episode()
     # Interrupted next attempt must not be promoted.
@@ -47,7 +48,8 @@ def failed_capture(tmp_path, outcome=True):
 
 @pytest.mark.parametrize("outcome", [True, False])
 def test_recovery_preserves_failed_original_and_outcome_provenance(tmp_path, outcome):
-    source = failed_capture(tmp_path, outcome)
+    batch = dict(precision="fine", eligible_frames=3, data_valid=True, intended_split="train")
+    source = failed_capture(tmp_path, outcome, **batch)
     original = {
         str(p.relative_to(source)): p.read_bytes() for p in source.rglob("*") if p.is_file()
     }
@@ -65,6 +67,8 @@ def test_recovery_preserves_failed_original_and_outcome_provenance(tmp_path, out
     result = next(e for e in events if e["event"] == "episode_outcome")
     assert result["task_outcome"] == ("success" if outcome else "unknown")
     assert result["outcome_source"] == ("persisted_save_request" if outcome else "not_recorded")
+    if outcome:
+        assert all(result[key] == value for key, value in batch.items())
 
 
 @pytest.mark.parametrize("damage", ["command", "missing_frames", "unsealed", "active"])

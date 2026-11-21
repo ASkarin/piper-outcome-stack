@@ -31,6 +31,8 @@ class PiperRecordConfig(RecordConfig):
     recording_layout_description: str | None = None
     recording_split: str | None = None
     recording_task_goal: int | None = None
+    # When set, start at this gain and count usable successes at it toward num_episodes.
+    recording_target_precision: str | None = None
     recording_context: dict[str, str] | None = None
 
 

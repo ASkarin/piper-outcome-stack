@@ -384,3 +384,99 @@ def test_task_progress_counts_outcomes_separately_and_shows_camera_layout(capsys
     assert "保存3/5｜成功1 失败1 取消1" in text
     assert "保存1/5｜成功1 失败0 取消0" in text
     assert "本会话" in text and "相机画面" in text
+
+
+@pytest.mark.parametrize(("goal", "successes"), [(50, 50), (6, 6), (50, 2)])
+def test_fine_batch_counts_eligible_successes_and_keeps_early_quit(goal, successes, capsys):
+    from unittest.mock import Mock
+    from lerobot_robot_outcome_piper.demonstration_segments import DemonstrationTracker
+
+    c = TeleopControl(initial_precision="fine")
+    attempts = [
+        ("fine", "2 missed", True),
+        ("fine", "3 cancelled", True),
+        ("fine", "r", True),
+        ("fine", "1", False),
+        ("normal", "1", True),
+        *[("fine", "1", True)] * successes,
+    ]
+    audit = Mock(attempt=0, pending=[], demonstration=DemonstrationTracker())
+    audit.dataset.num_episodes = 0
+    audit.prepare_episode.side_effect = ready_future
+
+    def finish_attempt(saved):
+        audit.attempt += 1
+        audit.dataset.num_episodes += int(saved)
+        audit.pending.clear()
+        audit.demonstration = DemonstrationTracker()
+
+    audit.save_episode.side_effect = lambda: finish_attempt(True)
+    audit.discard_episode.side_effect = lambda: finish_attempt(False)
+
+    def command():
+        if c.recording_phase == "preparing":
+            if audit.attempt == len(attempts):
+                assert successes < goal, "a full batch should finalize without another prompt"
+                return "q"
+            precision = attempts[audit.attempt][0]
+            return "3" if c.precision == precision else precision
+        if c.recording_phase == "recording":
+            return "end"
+        if c.recording_phase == "review":
+            return attempts[audit.attempt][1]
+        return None
+
+    def loop(**kw):
+        for _ in range(5000):
+            if kw["events"]["exit_early"]:
+                kw["events"]["exit_early"] = False
+                return
+            c.confirm_hold()
+            kw["teleop_action_processor"](({"hold": False, "neutral": True}, {}))
+            if kw["dataset"] is not None:
+                assert c.precision == attempts[audit.attempt][0]
+                audit.pending.append(0)
+                audit.demonstration.observe(
+                    {
+                        "demonstration_pause": {
+                            "manual": not attempts[audit.attempt][2],
+                            "protection_reason": None,
+                        }
+                    }
+                )
+            time.sleep(0.0002)
+        pytest.fail(f"batch stalled during {c.recording_phase}, attempt {audit.attempt}")
+
+    run_interactive_episodes(
+        NS(record_loop=loop),
+        dict(
+            events={},
+            teleop_action_processor=lambda value: value[0],
+            robot=NS(prepare_recording_gripper=lambda epoch: {}),
+        ),
+        audit,
+        NS(num_episodes=goal, episode_time_s=180),
+        c,
+        NS(poll=command),
+        tasks={"3": "Push-T"},
+        position="start-03",
+        target_precision="fine",
+    )
+    outcomes = [
+        call.kwargs for call in audit.emit.call_args_list if call.args == ("episode_outcome",)
+    ]
+    assert [o["task_outcome"] for o in outcomes[:4]] == [
+        "failure",
+        "cancelled",
+        "success",
+        "success",
+    ]
+    assert outcomes[2]["eligible_frames"] == 0 and not outcomes[2]["data_valid"]
+    assert outcomes[3]["precision"] == "normal" and outcomes[3]["data_valid"]
+    assert len(outcomes) == 4 + successes
+    assert all(
+        o["task_outcome"] == "success" and o["precision"] == "fine" and o["data_valid"]
+        for o in outcomes[4:]
+    )
+    audit.dataset.finalize.assert_called_once()
+    assert f"fine 有效成功示范 {successes}/{goal}" in capsys.readouterr().out

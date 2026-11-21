@@ -365,6 +365,7 @@ def run_interactive_episodes(
     split=None,
     task_goal=None,
     context=None,
+    target_precision=None,
 ):
     """SDK traffic remains in the ordinary loop; workers only save/discard/finalize."""
     terminal = TerminalCommands() if terminal is None else terminal
@@ -449,9 +450,12 @@ def run_interactive_episodes(
                 ui.job = None
 
         count = 0
+        goal_label = (
+            "已保存回合" if target_precision is None else f"{target_precision} 有效成功示范"
+        )
         try:
             while count < ds.num_episodes:
-                operator_message(f"[本次进度] 已保存 {count}/{ds.num_episodes} 回合，可提前退出。")
+                operator_message(f"[本次进度] {goal_label} {count}/{ds.num_episodes}，可提前退出。")
                 ui.preparation = audit.prepare_episode()
                 loop("preparing")
                 if ui.request and ui.request[0] == "quit":
@@ -487,6 +491,18 @@ def run_interactive_episodes(
                     continue
                 index, attempt = audit.dataset.num_episodes, audit.attempt
                 frames = len(audit.pending)
+                batch_info = {}
+                data_valid = bool(frames)
+                counts_toward_goal = True
+                if target_precision is not None:
+                    eligible = audit.demonstration.eligible_frames
+                    batch_info = dict(precision=control.precision, eligible_frames=eligible)
+                    data_valid = eligible > 0
+                    counts_toward_goal = (
+                        request[1] == "success"
+                        and control.precision == target_precision
+                        and data_valid
+                    )
                 audit.emit(
                     "episode_save_requested",
                     episode_index=index,
@@ -498,6 +514,8 @@ def run_interactive_episodes(
                     task_outcome=request[1],
                     note=request[2],
                     **({"task_context": context} if context else {}),
+                    data_valid=data_valid,
+                    **batch_info,
                 )
                 save_started = time.monotonic()
 
@@ -514,8 +532,9 @@ def run_interactive_episodes(
                             task=ui.task if tasks else loop_args.get("single_task"),
                             task_outcome=request[1],
                             note=request[2],
-                            data_valid=True,
+                            data_valid=data_valid,
                             **({"task_context": context} if context else {}),
+                            **batch_info,
                             save_duration_s=time.monotonic() - save_started,
                         )
                     audit.flush()
@@ -523,11 +542,12 @@ def run_interactive_episodes(
                 job("saving", seal)
                 save_elapsed = time.monotonic() - save_started
                 if frames:
-                    count += 1
+                    if counts_toward_goal:
+                        count += 1
                     if tasks:
                         ui.note_saved(request[1])
                     operator_message(
-                        f"[原始回合已保存] 本次第 {count} 回合｜{frames} 帧｜封存 {save_elapsed:.1f} 秒。可开始下一起点。",
+                        f"[原始回合已保存] 第 {index + 1} 回合｜{frames} 帧｜封存 {save_elapsed:.1f} 秒。",
                     )
                 else:
                     operator_message(
@@ -536,6 +556,8 @@ def run_interactive_episodes(
 
             if tasks:
                 operator_message(ui.task_progress())
+            if target_precision is not None:
+                operator_message(f"[本次进度] {goal_label} {count}/{ds.num_episodes}。")
             job("finalizing", audit.dataset.finalize)
         finally:
             control.recording_phase = None

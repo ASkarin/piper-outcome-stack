@@ -97,7 +97,8 @@ def require_sdk_kinematics():
     return pytest.importorskip("pyAgxArm.utiles.mdh_kinematics")
 
 
-def test_processor_save_load_round_trip_preserves_frozen_configuration(tmp_path: Path):
+@pytest.mark.parametrize("precision", ["normal", "fine"])
+def test_processor_save_load_round_trip_preserves_frozen_configuration(tmp_path: Path, precision):
     original = make_xbox_processor(
         safety(),
         max_xyz_step_m=0.01,
@@ -107,6 +108,7 @@ def test_processor_save_load_round_trip_preserves_frozen_configuration(tmp_path:
         ik_timeout_s=0.1,
         ik_residual_tolerance=0.001,
         ik_min_singular_value=0.001,
+        initial_precision=precision,
     )
     config_filename = "outcome_piper_xbox_processor.json"
     original.save_pretrained(tmp_path, config_filename=config_filename)
@@ -123,6 +125,8 @@ def test_processor_save_load_round_trip_preserves_frozen_configuration(tmp_path:
     assert isinstance(loaded.steps[0], OutcomePiperXboxProcessor)
     assert loaded.steps[0].safety == safety()
     assert loaded.steps[0].get_config() == original.steps[0].get_config()
+    assert loaded.steps[0].control.precision == precision
+    assert not loaded.steps[0].control.hold_confirmed
 
 
 def test_standard_piper_mdh_and_fk_golden():

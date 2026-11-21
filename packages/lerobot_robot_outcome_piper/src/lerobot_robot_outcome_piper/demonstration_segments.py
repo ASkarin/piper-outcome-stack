@@ -12,6 +12,7 @@ class DemonstrationTracker:
     def __init__(self):
         self.protection_reason = None
         self.previous_eligible = True
+        self.eligible_frames = 0
         self.segment_id = 0
 
     def observe(self, action):
@@ -37,6 +38,7 @@ class DemonstrationTracker:
         if eligible and not self.previous_eligible:
             self.segment_id += 1
         self.previous_eligible = eligible
+        self.eligible_frames += int(eligible)
         return {
             "eligible": eligible,
             "segment_id": self.segment_id,

@@ -3,7 +3,6 @@
   "teleop": null,
   "dataset": {
     "fps": 50,
-    "num_episodes": null,
     "episode_time_s": null,
     "single_task": null,
     "video": true,

@@ -302,6 +302,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
     tasks = getattr(cfg, "recording_tasks", None)
     position = getattr(cfg, "recording_position", None)
     task_goal = getattr(cfg, "recording_task_goal", None)
+    target_precision = getattr(cfg, "recording_target_precision", None)
     split = getattr(cfg, "recording_split", None)
     layout_description = getattr(cfg, "recording_layout_description", None)
     context = getattr(cfg, "recording_context", None)
@@ -319,6 +320,11 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             raise ValueError("C recording context differs from the actual scene")
         if split not in ("train", "development"):
             raise ValueError("C recording requires an explicit data split")
+    if target_precision is not None:
+        if teleop_action_processor.steps[0].control.precision != target_precision:
+            raise ValueError("recording_target_precision differs from the initial Xbox gain")
+        if type(cfg.dataset.num_episodes) is not int or cfg.dataset.num_episodes <= 0:
+            raise ValueError("successful demonstration target must be a positive integer")
     if task_goal is not None and (type(task_goal) is not int or task_goal <= 0):
         raise ValueError("recording_task_goal must be a positive integer")
     if split is not None and split not in ("train", "development"):
@@ -369,6 +375,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
                 layout_description=layout_description,
                 intended_split=split,
                 task_goal=task_goal,
+                **({"target_precision": target_precision} if target_precision is not None else {}),
                 **({"context": context} if context else {}),
             ),
             scene=asdict(cfg.robot.scene) if cfg.robot.scene else None,
@@ -441,6 +448,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             split=split,
             task_goal=task_goal,
             context=context,
+            target_precision=target_precision,
         )
         success = True
     except BaseException as exc:

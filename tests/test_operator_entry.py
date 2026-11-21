@@ -225,6 +225,8 @@ def test_pusht_record_shortcut(tmp_path, monkeypatch, extra, split):
     )
     assert saved["recording_split"] == split and saved["recording_position"] == "start-03"
     assert saved["recording_tasks"] == {"3": saved["dataset"]["single_task"]}
+    assert saved["recording_target_precision"] == "fine"
+    assert saved["dataset"]["num_episodes"] == (50 if split == "train" else 6)
     assert saved["robot"]["cameras"]["d435"] == {"use_rgb": True, "use_depth": False}
     assert not saved["export_depth"]
 

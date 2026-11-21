@@ -29,7 +29,9 @@ def _validate_workflow_configs(
     return robot, teleop
 
 
-def _processor(robot: OutcomePiperConfig, teleop: OutcomePiperXboxConfig):
+def _processor(
+    robot: OutcomePiperConfig, teleop: OutcomePiperXboxConfig, *, initial_precision="normal"
+):
     safety = load_motion_safety(robot.safety_path)
     return make_xbox_processor(
         safety,
@@ -37,6 +39,7 @@ def _processor(robot: OutcomePiperConfig, teleop: OutcomePiperXboxConfig):
         work_gripper_m=teleop.work_gripper_m,
         pose_timing=teleop.pose_timing,
         streaming_reference=teleop.streaming_reference,
+        initial_precision=initial_precision,
         gripper_reference=teleop.gripper_reference,
         max_xyz_step_m=teleop.xyz_step_m,
         max_rotation_step_rad=teleop.rotation_step_rad,
@@ -165,9 +168,14 @@ def record(cfg: Any) -> Any:
     if robot_config.capture_timing is None:
         raise ValueError("record requires measured capture_timing")
     with motion_input_safety_scope():
+        target_precision = getattr(cfg, "recording_target_precision", None)
         return record_with_telemetry(
             cfg,
-            teleop_action_processor=_processor(robot_config, teleop_config),
+            teleop_action_processor=_processor(
+                robot_config,
+                teleop_config,
+                initial_precision="normal" if target_precision is None else target_precision,
+            ),
         )
 
 

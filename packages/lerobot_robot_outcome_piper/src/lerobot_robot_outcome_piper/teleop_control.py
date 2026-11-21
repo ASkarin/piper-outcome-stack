@@ -47,7 +47,9 @@ class TranslationStrategy(str, Enum):
 
 
 class TeleopControl:
-    def __init__(self):
+    def __init__(self, *, initial_precision="normal"):
+        if initial_precision not in ("fine", "normal"):
+            raise ValueError("initial precision must be fine or normal")
         self._lock = threading.RLock()
         self.state = TeleopState.WAITING
         self.epoch = 0
@@ -80,7 +82,7 @@ class TeleopControl:
         self.pose_event = None
         self.pose_cancel_reason = None
         self.hold_settings = None
-        self.precision = "normal"
+        self.precision = initial_precision
         self.protection_reason = None
         self.protection_started_s = None
 

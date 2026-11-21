@@ -8,6 +8,7 @@ from pathlib import Path
 
 SKILL = "push_to_G"
 POSITION = "start-03"
+SUCCESS_GOALS = {"train": 50, "development": 6}
 INSTRUCTION = "在桌面推动 T 块，使位置和朝向与目标 G 对齐，再退出观察区。"
 
 # The October 27/29 closeout recipe; C checkpoints and scene values are separate.
@@ -54,7 +55,7 @@ def select_task(config):
 
 
 def configure_recording(config, split):
-    if split not in ("train", "development"):
+    if split not in SUCCESS_GOALS:
         raise ValueError("C recording requires train or development")
     selected = select_task(config)
     cfg = deepcopy(config)
@@ -63,15 +64,17 @@ def configure_recording(config, split):
     dataset = cfg["dataset"]
     if dataset.get("fps") != 50:
         raise ValueError("C recording requires the 50Hz dataset contract")
-    count = dataset.get("num_episodes")
-    if type(count) is not int or count <= 0:
-        raise ValueError("C requires positive dataset.num_episodes")
-    dataset.update(single_task=selected["task"], episode_time_s=selected["duration_s"])
+    dataset.update(
+        single_task=selected["task"],
+        episode_time_s=selected["duration_s"],
+        num_episodes=SUCCESS_GOALS[split],
+    )
     cfg.update(
         recording_tasks={"3": selected["task"]},
         recording_position=POSITION,
         recording_split=split,
-        recording_task_goal=count,
+        recording_task_goal=None,
+        recording_target_precision="fine",
         recording_context=selected["context"],
         recording_layout_description="第三种起点，终点为桌面三个角标 G。",
     )
@@ -99,6 +102,7 @@ def capture_manifest(sessions):
         if split not in sources:
             raise ValueError("C capture manifest supports train/development sessions")
         segments, excluded = [], []
+        required_precision = config.get("recording_target_precision")
         for index in range(dataset.num_episodes):
             outcome = outcomes.get(index)
             if outcome is None:
@@ -125,6 +129,15 @@ def capture_manifest(sessions):
                     groups[key] = split
             if not is_successful_demonstration(outcome):
                 excluded.append(dict(episode=index, outcome=outcome["task_outcome"]))
+                continue
+            if required_precision is not None and outcome["precision"] != required_precision:
+                excluded.append(
+                    dict(
+                        episode=index,
+                        outcome=outcome["task_outcome"],
+                        precision=outcome["precision"],
+                    )
+                )
                 continue
             task = outcome["task"]
             if dataset.meta.episodes["tasks"][index] != [task]:

@@ -200,12 +200,13 @@ def recover_sealed(source, output, episodes):
                     )
                     retained.append(
                         dict(
+                            request or {},
                             event="episode_outcome",
                             episode_index=remap[old],
                             attempt=attempt,
                             task_outcome="unknown" if request is None else request["task_outcome"],
                             position_id=None if request is None else request["position_id"],
-                            data_valid=True,
+                            data_valid=True if request is None else request.get("data_valid", True),
                             outcome_source="not_recorded"
                             if request is None
                             else "persisted_save_request",

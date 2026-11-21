@@ -108,9 +108,11 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
     pose_timing: dict | None = None
     gripper_reference: dict | None = None
     streaming_reference: dict | None = None
-    control: TeleopControl = field(default_factory=TeleopControl, init=False, repr=False)
+    initial_precision: str = "normal"
+    control: TeleopControl = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self.control = TeleopControl(initial_precision=self.initial_precision)
         if self.streaming_reference is not None:
             from .continuous_reference import ReferenceSettings
 
@@ -165,6 +167,7 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
             "work_gripper_m": self.work_gripper_m,
             "pose_timing": self.pose_timing,
             "streaming_reference": self.streaming_reference,
+            "initial_precision": self.initial_precision,
             "gripper_reference": self.gripper_reference,
             "max_xyz_step_m": self.max_xyz_step_m,
             "max_rotation_step_rad": self.max_rotation_step_rad,
@@ -676,6 +679,7 @@ def make_xbox_processor(
     pose_timing: dict | None = None,
     gripper_reference: dict | None = None,
     streaming_reference: dict | None = None,
+    initial_precision: str = "normal",
 ) -> RobotProcessorPipeline[tuple[RobotAction, dict[str, Any]], RobotAction]:
     return RobotProcessorPipeline(
         steps=[
@@ -685,6 +689,7 @@ def make_xbox_processor(
                 work_gripper_m=work_gripper_m,
                 pose_timing=pose_timing,
                 streaming_reference=streaming_reference,
+                initial_precision=initial_precision,
                 gripper_reference=gripper_reference,
                 max_xyz_step_m=max_xyz_step_m,
                 max_rotation_step_rad=max_rotation_step_rad,

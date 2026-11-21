@@ -197,6 +197,10 @@ def execute(args, profile):
             from piper_outcome_stack.task_c import configure_recording
 
             cfg = configure_recording(cfg, args.split or "train")
+            print(
+                f"Push-T {cfg['recording_split']}｜默认精细档 50%｜"
+                f"本会话目标 {cfg['dataset']['num_episodes']} 条有效精细档成功示范。"
+            )
         if mode in ("b", "c"):
             root = root / ("task-" + mode)
             if mode == "c":

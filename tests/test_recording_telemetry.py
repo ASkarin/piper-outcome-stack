@@ -447,7 +447,8 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
         "synthetic four positions",
     )
     robot.config.scene = scene
-    c = TeleopControl()
+    fine_batch = c_skill and not redo
+    c = TeleopControl(initial_precision="fine" if fine_batch else "normal")
     c.gripper_target = 0.03  # Synthetic successful gripper command.
     robot.prepare_recording_gripper = lambda epoch: {"initialized": False}
 
@@ -551,6 +552,8 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
         cfg.recording_tasks = {"3": selected["task"]}
         cfg.recording_position = selected["position"]
         cfg.recording_split = "development"
+        if fine_batch:
+            cfg.recording_target_precision = "fine"
         cfg.dataset.fps = 50
         cfg.teleop = xbox_config(control_hz=50)
     raw = record_with_telemetry(cfg, teleop_action_processor=pipeline)
@@ -611,6 +614,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
                     "dataset": {"root": str(next_output), "repo_id": cfg.dataset.repo_id},
                     "recording_split": "development",
                     "recording_context": selected["context"],
+                    **({"recording_target_precision": "fine"} if fine_batch else {}),
                 }
             )
         )

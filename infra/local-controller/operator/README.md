@@ -9,7 +9,7 @@ No service, CAN setup, new backend or sudo permission is installed.
 |---|---|
 | `piper act SKILL 1` | Run the configured fixed ACT bundle; `--verify-only` checks assets without device I/O. |
 | `piper record` | New Xbox raw capture; existing LB/X/RB/A/Y/B controls. |
-| `piper record c` | 第三种起点的 Push‑T 训练示范。开发集用 `piper record c --split development`。 |
+| `piper record c` | 第三种起点的 Push‑T 默认精细档，训练连续采 50 条有效成功示范。补采开发集用 `piper record c --split development`，目标为 6 条。 |
 | `piper record b --split train` | B training capture: choose layout, then choose a task for each episode. |
 | `piper record b --split development` | B development capture in a separate session: choose layout, then task. |
 | `piper status` | Fixed passive status query. |
@@ -68,7 +68,7 @@ This change does not automatically start capture, replay, conversion or training
 
 ## Fine control and demonstration pauses, 2026-10-10
 
-In the `piper record` or `piper record b` operator terminal, use `fine` or
+In the `piper record` preparation menu for A, B, or C, use `fine` or
 `normal` in preparation, before selecting the task. Release LB and the mode/pose buttons,
 center sticks/triggers, and wait for confirmed hold before switching. No command
 is queued if these conditions are not met. The next movement still needs a fresh
@@ -77,8 +77,8 @@ with the current 50Hz defaults this is 1.25mm/tick (62.5mm/s per coordinate),
 0.25degree/tick and 3mm lead per coordinate. The deadzone is applied to the raw
 joystick axes before this gain, so selecting fine does not change its threshold.
 Gripper generation and A/Y preset
-trajectories retain their existing parameters. Normal is the initial setting;
-the selected gain persists across episodes and is saved in action telemetry.
+trajectories retain their existing parameters. A/B sessions start in normal and C sessions start in fine.
+The selected gain persists across episodes and is saved in action telemetry.
 
 During recording, data eligibility follows the existing LB permission without
 keyboard interaction. Releasing LB invokes the existing hold and automatically
