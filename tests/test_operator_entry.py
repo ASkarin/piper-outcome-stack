@@ -184,61 +184,65 @@ def test_smolvla_routes_frozen_recipe_and_verify_only_does_not_load_models(tmp_p
     assert len(calls) == 1
 
 
-def test_c_capture_has_separate_paths_and_retains_skill_context(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("extra", "split"), [([], "train"), (["--split", "development"], "development")]
+)
+def test_pusht_record_shortcut(tmp_path, monkeypatch, extra, split):
     p = profile(tmp_path)
+    start, goal = tmp_path / "start-03.png", tmp_path / "target-G.png"
+    start.touch()
+    goal.touch()
     cfg = {
-        "robot": {"scene": {"scene_id": "synthetic-c"}},
-        "teleop": {},
-        "dataset": {"fps": 50, "num_episodes": 1},
-        "task_c": {
-            "drawer_id": "drawer01",
-            "position_id": "C-p1",
-            "objects": {"cup01": "蓝色杯子"},
-            "duration_s": {"store_cup": 2},
+        "robot": {
+            "scene": {"scene_id": "synthetic-C"},
+            "cameras": {"d435": {"use_rgb": True, "use_depth": False}},
         },
+        "teleop": {},
+        "dataset": {"fps": 50, "num_episodes": 2},
+        "task_c": {
+            "start_reference": str(start),
+            "goal_reference": str(goal),
+            "position_id": "start-03",
+            "duration_s": 2,
+        },
+        "export_depth": False,
     }
-    path = tmp_path / "c.json"
-    path.write_text(json.dumps(cfg))
-    p["record_c_config"] = str(path)
-    monkeypatch.setattr(op.subprocess, "run", lambda *a, **kw: NS(returncode=0, stdout="measured"))
+    config_path = tmp_path / "record-c.json"
+    config_path.write_text(json.dumps(cfg))
+    p["record_c_config"] = str(config_path)
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(p))
+    monkeypatch.setattr(op.subprocess, "run", lambda *a, **k: NS(returncode=0, stdout="measured"))
     monkeypatch.setattr(provenance, "capture", lambda *a: None)
     calls = []
-    monkeypatch.setattr(op, "logged", lambda cmd, run: calls.append((cmd, run)) or 0)
-    op.execute(
-        NS(
-            command="record",
-            mode="c",
-            skill="store_cup",
-            object_id="cup01",
-            chain_id=None,
-            split="development",
-            layout=None,
-        ),
-        p,
-    )
-    command, run = calls[0]
+    monkeypatch.setattr(op, "logged", lambda command, run: calls.append((command, run)) or 0)
+    op.main(["--profile", str(profile_path), "record", "c", *extra])
+    cmd, run = calls[0]
     saved = json.loads((run / "config.json").read_text())
-    assert command[:4] == ["sudo", "piper-socketcan", "exec", "--"]
-    assert "/task-c/" in saved["raw_root"] and "/task-c/" in saved["dataset"]["root"]
-    assert saved["recording_context"]["skill_id"] == "store_cup"
-    assert saved["recording_context"]["object_id"] == "cup01"
-    assert "蓝色杯子" in saved["dataset"]["single_task"]
+    assert cmd[:4] == ["sudo", "piper-socketcan", "exec", "--"]
+    assert (
+        f"/task-c/{split}/" in saved["raw_root"] and f"/task-c/{split}/" in saved["dataset"]["root"]
+    )
+    assert saved["recording_split"] == split and saved["recording_position"] == "start-03"
+    assert saved["recording_tasks"] == {"3": saved["dataset"]["single_task"]}
+    assert saved["robot"]["cameras"]["d435"] == {"use_rgb": True, "use_depth": False}
+    assert not saved["export_depth"]
 
 
-def test_c_check_shortcut_never_uses_sudo(tmp_path, monkeypatch):
+def test_c_check_uses_active_config_without_privileges(tmp_path, monkeypatch):
     p = profile(tmp_path)
+    p["record_c_config"] = str(tmp_path / "c.json")
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(p))
     calls = []
     monkeypatch.setattr(op.subprocess, "call", lambda cmd: calls.append(cmd) or 0)
-    op.execute(
-        NS(
-            command="c",
-            mode="check",
-            config=tmp_path / "c.json",
-            skill="open_drawer",
-            object_id=None,
-            chain_id=None,
-        ),
-        p,
-    )
-    assert calls[0][:4] == [p["python"], "-m", "piper_outcome_stack.task_c", "check"]
+    op.main(["--profile", str(path), "c", "check"])
+    assert calls[0][:6] == [
+        p["python"],
+        "-m",
+        "piper_outcome_stack.task_c",
+        "check",
+        "--config",
+        p["record_c_config"],
+    ]
     assert "sudo" not in calls[0]

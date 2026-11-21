@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from .task_c import EXECUTION_RECIPE, select_skill, text_field
+from .task_c import EXECUTION_RECIPE, select_task, text_field
 
 
 def prepare_policy(config, selected, directory):
@@ -38,8 +38,6 @@ def prepare_policy(config, selected, directory):
     gripper = GripperReferenceSettings(**teleop_cfg.gripper_reference)
     policy = config.get("policy") or {}
     key = selected["context"]["skill_id"]
-    if "object_id" in selected["context"]:
-        key += ":" + selected["context"]["object_id"]
 
     def asset(value, name):
         path = Path(text_field(value, name))
@@ -82,7 +80,7 @@ def run_segment(robot_cfg, teleop_cfg, safety, gripper, predictor, selected, rep
 
     print(selected["context"]["start_condition"])
     print("从当前姿态开始。松开LB并回中，建立保持后再按住LB；松LB结束，B急停。")
-    print(f"技能：{selected['task']}；最长运行{selected['duration_s']}秒。")
+    print(f"Push-T｜{selected['position']}｜{selected['task']}  上限 {selected['duration_s']} 秒")
     if input("回车：连接并使能、建立当前位置保持；其他输入：取消。\n> ") != "":
         report.update(status="cancelled_before_connection", policy_actions_sent=0)
         return
@@ -153,7 +151,7 @@ def run_segment(robot_cfg, teleop_cfg, safety, gripper, predictor, selected, rep
                 raise
 
 
-def execute(config_path, skill, object_id, mode, output, chain_id=None):
+def execute(config_path, mode, output):
     if mode not in ("check", "run"):
         raise ValueError("C execution requires check or run")
     config_path, output = Path(config_path), Path(output)
@@ -172,7 +170,7 @@ def execute(config_path, skill, object_id, mode, output, chain_id=None):
         predictor = None
         try:
             config = json.loads(config_path.read_text())
-            selected = select_skill(config, skill, object_id, chain_id)
+            selected = select_task(config)
             report.update(
                 task=selected["task"],
                 task_context=selected["context"],

@@ -4,7 +4,7 @@
 
 ## 当前场地与新模板
 
-已有场地使用活动operator/profile.json、record.json与safety.json，不用模板覆盖。默认piper record为控制/Dataset50Hz、640×480 RGBD60，新的原始数据与转换输出进入SSD的xbox-50hz目录。
+已有场地使用活动operator/profile.json、record.json与safety.json，不用模板覆盖。自2026-11-21起，默认 Xbox 采集为控制/Dataset 50 Hz、640×480 RGB 60 fps，关闭深度流，新的原始数据与转换输出进入SSD的xbox-50hz目录。
 
 新场地从configs/scenes/new-table模板复制到独立目录，补充scene_id、实际安装/视角、工作区、相机身份与测得的时间参数。A/X映射按设备实测；模板候选工作姿态不是新桌面的安全结论。当前软件0～120mm夹爪目标、1N、15mm相对反馈上限及SDK50%/关节10°是已批准活动配置，不等于120mm物理行程或任意安装均安全。
 
@@ -18,7 +18,7 @@ A/Y请求时LB松开、保持确认、全回中；松开目标键后按住LB。�
 
 ## 搬迁影响的时间核对
 
-新设备/流或USB拓扑改变时，按明确read_only配置做联合测量，先暖机再测60秒；当前模板为640×480 RGBD60、采样50Hz：
+新设备/流或USB拓扑改变时，按明确read_only配置做联合测量，先暖机再测60秒；测量模板默认包含深度，按实际采集的流选择；RGB 采集对应 640×480 RGB 60 fps、采样 50 Hz：
 
 ```bash
 sudo piper-socketcan exec -- /实际开发目录/.venv/bin/piper-outcome-stack capture-timing measure   --config /实际新场地/measure.json --output /实际新场地/timing-01 --seconds 60 --fps 50

@@ -9,6 +9,7 @@ No service, CAN setup, new backend or sudo permission is installed.
 |---|---|
 | `piper act SKILL 1` | Run the configured fixed ACT bundle; `--verify-only` checks assets without device I/O. |
 | `piper record` | New Xbox raw capture; existing LB/X/RB/A/Y/B controls. |
+| `piper record c` | 第三种起点的 Push‑T 训练示范。开发集用 `piper record c --split development`。 |
 | `piper record b --split train` | B training capture: choose layout, then choose a task for each episode. |
 | `piper record b --split development` | B development capture in a separate session: choose layout, then task. |
 | `piper status` | Fixed passive status query. |
@@ -45,10 +46,11 @@ piper --help
 
 Shell routing tests use fake subprocesses and never access hardware.
 
-## Default capture, approved 2026-09-20
+## Default Xbox capture
 
 Use `piper record` without a trial profile: control and Dataset are 50 Hz, the
-D435 streams 640×480 RGBD at 60 fps. The default remains 20 attempts (five per
+D435 streams 640×480 RGB at 60 fps. Since 2026-11-21, the active A/B/C capture
+profiles save RGB, state and action with the depth stream disabled. Task A allows 20 attempts (five per
 P1–P4), up to 180 seconds per attempt, with failures retained separately. Each
 invocation creates an independent session; it does not resume or mix old 20 Hz data.
 New default raw/Dataset sessions use the SSD `piper-data/raw/xbox-50hz` and
@@ -229,4 +231,4 @@ piper smolvla flat blue-right 2
 
 verify-only核对freeze.json中的资产身份，不加载模型或连接设备；实际run仍调用原run-policy.py，保持两模型、四模板、两布局及原操作者启动行为。原56次记录不改写。无默认模型替换，也不把这两组B模型称为已训练的C模型。
 
-C新增`piper record c --skill ... --split ...`与`piper c check|run --config ... --skill ...`，完整参数、数据与验证范围见[任务C说明](../../../docs/operations/piper_task_c.md)。record_c_config只指向C专用配置；待实物配置完成前，模板缺项会明确拒绝。原A/B入口保持。
+2026-11-21，正式 C 为 Push‑T。直接使用 `piper record c`、`piper record c --split development`、`piper c check` 和 `piper c run`，场景与模型通过活动 profile 的 record_c_config 绑定。模型检查与运行需要实际 C checkpoint。详见[阶段 C 操作说明](../../../docs/operations/piper_task_c.md)。

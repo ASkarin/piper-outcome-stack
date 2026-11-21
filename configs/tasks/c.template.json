@@ -10,18 +10,15 @@
     "push_to_hub": false
   },
   "task_c": {
-    "drawer_id": null,
-    "objects": {},
-    "position_id": null,
-    "duration_s": {
-      "open_drawer": null,
-      "store_cup": null,
-      "close_drawer": null
-    }
+    "position_id": "start-03",
+    "start_reference": null,
+    "goal_reference": null,
+    "duration_s": null
   },
   "policy": {
     "checkpoint": null,
     "vlm_assets": null,
     "reference_inputs": {}
-  }
+  },
+  "export_depth": false
 }

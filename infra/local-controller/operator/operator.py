@@ -120,6 +120,8 @@ def execute(args, profile):
         ]
         return subprocess.call(command)
     if args.command == "c":
+        if "record_c_config" not in profile:
+            raise ValueError("尚未配置采集入口 record_c_config")
         run = new_run(profile, "task-c")
         output = run / "trial.json"
         command = [
@@ -128,16 +130,10 @@ def execute(args, profile):
             "piper_outcome_stack.task_c",
             args.mode,
             "--config",
-            str(args.config),
-            "--skill",
-            args.skill,
+            profile["record_c_config"],
             "--output",
             str(output),
         ]
-        if args.object_id is not None:
-            command += ["--object", args.object_id]
-        if args.chain_id is not None:
-            command += ["--chain-id", args.chain_id]
         if args.mode == "check":
             return subprocess.call(command)
         from provenance import capture
@@ -169,10 +165,6 @@ def execute(args, profile):
             mode != "b" and getattr(args, "layout", None)
         ):
             raise ValueError("--layout仅用于B采集；--split用于B/C采集")
-        if mode != "c" and any(
-            getattr(args, key, None) for key in ("skill", "object_id", "chain_id")
-        ):
-            raise ValueError("--skill/--object/--chain-id仅用于C采集")
         root = Path(profile["raw_parent"])
         mounted = subprocess.run(
             ["findmnt", "-rn", "-M", profile["ssd_mount"], "-o", "UUID"],
@@ -204,15 +196,18 @@ def execute(args, profile):
         elif mode == "c":
             from piper_outcome_stack.task_c import configure_recording
 
-            cfg = configure_recording(cfg, args.skill, args.object_id, args.split, args.chain_id)
+            cfg = configure_recording(cfg, args.split or "train")
         if mode in ("b", "c"):
             root = root / ("task-" + mode)
-            root.mkdir(exist_ok=True)
+            if mode == "c":
+                root = root / cfg["recording_split"]
+            root.mkdir(parents=True, exist_ok=True)
         run = new_run(profile, "record-" + mode if mode in ("b", "c") else "record")
         cfg["raw_root"] = str(root / run.name)
         cfg["dataset"]["root"] = str(
             Path(profile["dataset_parent"])
             / ("task-" + mode if mode in ("b", "c") else "")
+            / (cfg["recording_split"] if mode == "c" else "")
             / run.name
         )
         cfg["dataset"]["repo_id"] = "local/xbox-" + run.name
@@ -303,9 +298,6 @@ def main(argv=None):
     record.add_argument("mode", nargs="?", choices=("a", "b", "c"), default="a")
     record.add_argument("--layout", choices=("1", "2"))
     record.add_argument("--split", choices=("train", "development"))
-    record.add_argument("--skill", choices=("open_drawer", "store_cup", "close_drawer"))
-    record.add_argument("--object", dest="object_id")
-    record.add_argument("--chain-id")
     act = sub.add_parser("act", help="Run the selected frozen ACT bundle")
     act.add_argument("skill", choices=("green-left", "green-right", "blue-left", "blue-right"))
     act.add_argument("layout", choices=("1", "2"))
@@ -317,12 +309,6 @@ def main(argv=None):
     smolvla.add_argument("--verify-only", action="store_true")
     task_c = sub.add_parser("c", help="Check or run one C skill from the current pose")
     task_c.add_argument("mode", choices=("check", "run"))
-    task_c.add_argument("--config", type=Path, required=True)
-    task_c.add_argument(
-        "--skill", choices=("open_drawer", "store_cup", "close_drawer"), required=True
-    )
-    task_c.add_argument("--object", dest="object_id")
-    task_c.add_argument("--chain-id")
     for name in ("recover", "status", "link", "firmware", "limits", "acceleration"):
         sub.add_parser(name)
     for name in ("convert", "audit", "pauses"):

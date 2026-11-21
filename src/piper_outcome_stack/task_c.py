@@ -1,4 +1,4 @@
-"""Fixed drawer skills, capture metadata and operator-started single-skill trials."""
+"""Stage C Push-T capture, data selection and operator-started trials."""
 
 import argparse
 from copy import deepcopy
@@ -6,23 +6,9 @@ import json
 import math
 from pathlib import Path
 
-SKILLS = {
-    "open_drawer": {
-        "instruction": "打开抽屉，松开把手并退出。",
-        "start_condition": "抽屉关闭，夹爪空闲，机械臂位于本技能约定的起始范围。",
-        "success_description": "抽屉达到约定开度，把手已释放，夹爪退出后续取杯区域。",
-    },
-    "store_cup": {
-        "instruction": "把{object}放入抽屉，松开并退出。",
-        "start_condition": "抽屉已打开，目标杯位于约定取物范围，机械臂位于本技能起始范围。",
-        "success_description": "正确杯子稳定留在抽屉内，夹爪已释放并退出关闭路径。",
-    },
-    "close_drawer": {
-        "instruction": "关闭抽屉并退出。",
-        "start_condition": "杯子已放稳，夹爪空闲且位于抽屉外，关闭路径可用。",
-        "success_description": "抽屉达到约定关闭状态，杯子未被挤出，机械臂已退出。",
-    },
-}
+SKILL = "push_to_G"
+POSITION = "start-03"
+INSTRUCTION = "在桌面推动 T 块，使位置和朝向与目标 G 对齐，再退出观察区。"
 
 # The October 27/29 closeout recipe; C checkpoints and scene values are separate.
 EXECUTION_RECIPE = {
@@ -43,63 +29,51 @@ def text_field(value, name):
     return value
 
 
-def select_skill(config, skill, object_id=None, chain_id=None):
-    if skill not in SKILLS:
-        raise ValueError(f"unknown C skill: {skill}")
-    metadata = config.get("task_c")
-    if not isinstance(metadata, dict):
-        raise ValueError("C configuration requires task_c")
+def select_task(config):
+    meta = config.get("task_c") or {}
     scene = (config.get("robot") or {}).get("scene") or {}
     context = {
         "task_family": "C",
-        "skill_id": skill,
+        "skill_id": SKILL,
+        "start_id": POSITION,
         "scene_id": text_field(scene.get("scene_id"), "robot.scene.scene_id"),
-        "drawer_id": text_field(metadata.get("drawer_id"), "task_c.drawer_id"),
-        "start_condition": SKILLS[skill]["start_condition"],
-        "success_description": SKILLS[skill]["success_description"],
+        "start_condition": "按第三种参考图摆放 T 块，保留自然复位误差。",
+        "success_description": "推动 T 块对齐 G 的三个角标，撤开夹爪后 T 块保持对齐。",
     }
-    task = SKILLS[skill]["instruction"]
-    if skill == "store_cup":
-        objects = metadata.get("objects", {})
-        if not isinstance(objects, dict) or object_id not in objects:
-            raise ValueError("store_cup requires an object ID from task_c.objects")
-        name = text_field(objects[object_id], f"task_c.objects.{object_id}")
-        task = task.format(object=name)
-        context.update(object_id=object_id, object_name=name)
-    elif object_id is not None:
-        raise ValueError("--object applies only to store_cup")
-    if chain_id is not None:
-        context["chain_id"] = text_field(chain_id, "chain_id")
-    duration = metadata.get("duration_s", {}).get(skill)
+    if meta.get("position_id") != POSITION:
+        raise ValueError(f"C requires position_id={POSITION}")
+    for key in ("start_reference", "goal_reference"):
+        value = text_field(meta.get(key), f"task_c.{key}")
+        if not Path(value).is_file():
+            raise FileNotFoundError(f"C {key}: {value}")
+        context[key] = value
+    duration = meta.get("duration_s")
     if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
-        raise ValueError(f"C configuration requires a positive task_c.duration_s.{skill}")
-    position = text_field(metadata.get("position_id"), "task_c.position_id")
-    return dict(task=task, context=context, duration_s=duration, position=position)
+        raise ValueError("C configuration requires positive task_c.duration_s")
+    return dict(task=INSTRUCTION, context=context, duration_s=duration, position=POSITION)
 
 
-def configure_recording(config, skill, object_id, split, chain_id=None):
+def configure_recording(config, split):
     if split not in ("train", "development"):
-        raise ValueError("C recording requires explicit --split train|development")
-    selected = select_skill(config, skill, object_id, chain_id)
+        raise ValueError("C recording requires train or development")
+    selected = select_task(config)
     cfg = deepcopy(config)
     cfg.pop("task_c")
     cfg.pop("policy", None)
     dataset = cfg["dataset"]
     if dataset.get("fps") != 50:
-        raise ValueError("C recording uses the existing 50Hz dataset contract")
+        raise ValueError("C recording requires the 50Hz dataset contract")
     count = dataset.get("num_episodes")
     if type(count) is not int or count <= 0:
-        raise ValueError("set the C session's positive dataset.num_episodes explicitly")
-    if chain_id is not None and count != 1:
-        raise ValueError("one chain ID labels one real attempt; capture one episode per skill")
+        raise ValueError("C requires positive dataset.num_episodes")
     dataset.update(single_task=selected["task"], episode_time_s=selected["duration_s"])
     cfg.update(
-        recording_tasks={"1": selected["task"]},
-        recording_position=selected["position"],
+        recording_tasks={"3": selected["task"]},
+        recording_position=POSITION,
         recording_split=split,
         recording_task_goal=count,
         recording_context=selected["context"],
-        recording_layout_description=selected["context"]["start_condition"],
+        recording_layout_description="第三种起点，终点为桌面三个角标 G。",
     )
     return cfg
 
@@ -132,7 +106,11 @@ def capture_manifest(sessions):
             context = outcome.get("task_context")
             if context != config.get("recording_context") or not context:
                 raise ValueError("C episode context differs from its capture configuration")
-            if context.get("task_family") != "C" or context.get("skill_id") not in SKILLS:
+            if (
+                context.get("task_family") != "C"
+                or context.get("skill_id") != SKILL
+                or context.get("start_id") != POSITION
+            ):
                 raise ValueError("manifest requires C skill metadata")
             if outcome["intended_split"] != split:
                 raise ValueError("C episode split differs from its capture configuration")
@@ -182,9 +160,6 @@ def main(argv=None):
     for mode in ("check", "run"):
         command = commands.add_parser(mode)
         command.add_argument("--config", type=Path, required=True)
-        command.add_argument("--skill", choices=SKILLS, required=True)
-        command.add_argument("--object", dest="object_id")
-        command.add_argument("--chain-id")
         command.add_argument("--output", type=Path, required=True)
     manifest = commands.add_parser("manifest")
     manifest.add_argument("--session", type=Path, action="append", required=True)
@@ -198,9 +173,7 @@ def main(argv=None):
     else:
         from .task_c_execution import execute
 
-        result = execute(
-            args.config, args.skill, args.object_id, args.mode, args.output, args.chain_id
-        )
+        result = execute(args.config, args.mode, args.output)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

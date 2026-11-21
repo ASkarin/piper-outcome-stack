@@ -67,7 +67,7 @@ def prompt_label(trial, input_fn=input, output_fn=print):
     context = report.get("task_context")
     if context and context.get("task_family") == "C":
         output_fn("程序状态与物理观察分别保留；程序故障回合计失败。")
-        output_fn("本次只评价单技能，不代表完整C任务。")
+        output_fn("本回合起点：" + report["position"])
         output_fn("1 成功：" + context["success_description"])
     else:
         output_fn("请按实际任务结果标注，程序报错不自动等于抓放失败。")
@@ -128,7 +128,11 @@ def summarize(paths):
         key = value["position"]
         if context and context.get("task_family") == "C":
             key = "/".join(
-                [context["scene_id"], context["skill_id"], context.get("object_id", "-")]
+                [
+                    context["scene_id"],
+                    context["skill_id"],
+                    context.get("start_id") or context.get("object_id", "-"),
+                ]
             )
         cell = cells.setdefault(key, dict(success=0, failure=0, invalid=0))
         cell[value["task_outcome"]] += 1

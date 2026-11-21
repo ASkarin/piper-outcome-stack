@@ -425,7 +425,7 @@ def test_centered_gripper_updates_hold_reference_without_faking_joint_writes(tmp
 
 
 @pytest.mark.parametrize("redo", [False, True])
-@pytest.mark.parametrize("c_skill", [None, "open_drawer", "store_cup", "close_drawer"])
+@pytest.mark.parametrize("c_skill", [None, "push_to_G"])
 def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     tmp_path, monkeypatch, redo, c_skill
 ):
@@ -511,7 +511,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
             assert self.count < 500, "interactive phase stalled"
             phase = c.recording_phase
             if phase == "preparing" and "start" not in self.sent:
-                return "1" if c_skill else "start p1"
+                return "3" if c_skill else "start p1"
             if phase == "recording":
                 self.sent.add("start")
                 return "end"
@@ -531,23 +531,24 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     cfg.raw_root = str(tmp_path / "raw")
     cfg.teleop = xbox_config(control_hz=30)
     if c_skill:
-        from piper_outcome_stack.task_c import select_skill
+        from piper_outcome_stack.task_c import select_task
 
-        selected = select_skill(
+        start, goal = tmp_path / "start.png", tmp_path / "goal.png"
+        start.touch()
+        goal.touch()
+        selected = select_task(
             {
                 "robot": {"scene": {"scene_id": scene.scene_id}},
                 "task_c": {
-                    "drawer_id": "synthetic-drawer",
-                    "objects": {"cup01": "蓝色杯子"},
-                    "position_id": "C-fixed",
-                    "duration_s": {c_skill: 0.001},
+                    "start_reference": str(start),
+                    "goal_reference": str(goal),
+                    "position_id": "start-03",
+                    "duration_s": 0.001,
                 },
             },
-            c_skill,
-            "cup01" if c_skill == "store_cup" else None,
         )
         cfg.recording_context = selected["context"]
-        cfg.recording_tasks = {"1": selected["task"]}
+        cfg.recording_tasks = {"3": selected["task"]}
         cfg.recording_position = selected["position"]
         cfg.recording_split = "development"
         cfg.dataset.fps = 50
@@ -574,6 +575,9 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
         assert loaded[0]["task"] == selected["task"]
         raw_spec = json.loads((raw.root / "raw.json").read_text())
         assert raw_spec["capture_context"]["recording"]["context"] == selected["context"]
+        assert not list(raw.root.glob("telemetry/*/raw_depth/*/*.npz"))
+        assert not loaded.meta.depth_keys
+        assert {"observation.images.d435", "observation.state", "action"} <= set(loaded.features)
     else:
         raw_spec = json.loads((raw.root / "raw.json").read_text())
         assert "context" not in raw_spec["capture_context"]["recording"]

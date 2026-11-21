@@ -20,7 +20,7 @@
         "height": 480,
         "fps": 60,
         "use_rgb": true,
-        "use_depth": true,
+        "use_depth": false,
         "warmup_s": 3
       }
     },

@@ -38,7 +38,7 @@ def test_check_never_constructs_devices_or_runs(c_config, tmp_path, monkeypatch)
     monkeypatch.setattr(execution, "run_segment", forbidden)
     path = tmp_path / "c.json"
     path.write_text(json.dumps(c_config))
-    result = execution.execute(path, "open_drawer", None, "check", tmp_path / "check.json")
+    result = execution.execute(path, "check", tmp_path / "check.json")
     assert result["status"] == "software_check_completed" and not result["hardware_io"]
     assert resets and result["recipe"]["joint_lowpass"] is False
     assert "task_outcome" not in result
@@ -116,9 +116,9 @@ def test_current_pose_entry_and_cleanup_keep_existing_motion_contract(
     path.write_text(json.dumps(c_config))
     if failure:
         with pytest.raises(RuntimeError, match="failure"):
-            execution.execute(path, "store_cup", "cup01", "run", output)
+            execution.execute(path, "run", output)
     else:
-        execution.execute(path, "store_cup", "cup01", "run", output)
+        execution.execute(path, "run", output)
     report = json.loads(output.read_text())
     assert report["status"] == ("failed" if failure else "segment_ended_held")
     assert report["last_action_telemetry"] == Robot.last_action_telemetry
@@ -139,7 +139,7 @@ def test_cancel_before_connection_has_no_device_io(c_config, tmp_path, monkeypat
     )
     path = tmp_path / "c.json"
     path.write_text(json.dumps(c_config))
-    result = execution.execute(path, "close_drawer", None, "run", tmp_path / "cancel.json")
+    result = execution.execute(path, "run", tmp_path / "cancel.json")
     assert result["status"] == "cancelled_before_connection" and not result["hardware_io"]
 
 
@@ -150,7 +150,7 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
     from lerobot.robots.config import RobotConfig
     from lerobot_robot_outcome_piper.timing import CaptureTiming
     from piper_policy.smolvla import SmolVLAChunkPredictor
-    from piper_outcome_stack.task_c import select_skill
+    from piper_outcome_stack.task_c import select_task
     from test_plugin import config, xbox_config
     from test_policy_gripper_reference import SETTINGS
 
@@ -163,7 +163,7 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
     checkpoint, vlm, reference = tmp_path / "checkpoint", tmp_path / "vlm", tmp_path / "refs.npz"
     checkpoint.mkdir()
     vlm.mkdir()
-    selected = select_skill(c_config, "open_drawer")
+    selected = select_task(c_config)
     np.savez(
         reference,
         tasks=np.array([selected["task"]]),
@@ -174,7 +174,7 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
     c_config["policy"] = {
         "checkpoint": str(checkpoint),
         "vlm_assets": str(vlm),
-        "reference_inputs": {"open_drawer": str(reference)},
+        "reference_inputs": {"push_to_G": str(reference)},
     }
     calls = []
     predictor = NS(
