@@ -64,6 +64,13 @@ class OutcomePiperConfig(RobotConfig):
         observation_camera_features(self.cameras)
 
 
+# Operator-measured SDL bindings for the controller used by the PiPER station.
+# Both new manual workflows use this pair; on other GUIDs use their measured config.
+STATION_XBOX_GUID = "0300509d5e040000120b000017050000"
+STATION_XBOX_TRANSLATION_BUTTON = 2  # X
+STATION_XBOX_PRECISION_BUTTON = 7  # Menu (≡)
+
+
 @TeleoperatorConfig.register_subclass("outcome_piper_xbox")
 @dataclass(kw_only=True)
 class OutcomePiperXboxConfig(TeleoperatorConfig):

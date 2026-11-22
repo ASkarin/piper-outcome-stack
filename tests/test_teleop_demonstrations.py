@@ -339,7 +339,8 @@ def test_entirely_protected_capture_is_not_a_training_dataset(tmp_path):
     assert not out.exists() and json.loads((raw / "capture.json").read_text())["status"] == "closed"
 
 
-def test_mapped_x_and_menu_toggle_independently_once_per_press():
+@pytest.mark.parametrize("phase", [None, "recording"])
+def test_x_selects_translation_and_menu_toggles_gain_once_per_press(phase):
     from test_plugin import FakeJoystick, xbox_config
     from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox
     from lerobot_robot_outcome_piper.teleop_control import TranslationStrategy
@@ -352,13 +353,13 @@ def test_mapped_x_and_menu_toggle_independently_once_per_press():
         emergency_stop_button=1,
         mode_switch_button=5,
         home_button=3,
-        translation_switch_button=7,
-        precision_switch_button=2,
+        translation_switch_button=2,
+        precision_switch_button=7,
     )
     xbox = OutcomePiperXbox(cfg, joystick_factory=lambda guid: pad)
     xbox.connect()
     control = TeleopControl(initial_precision="fine")
-    control.recording_phase = "recording"
+    control.recording_phase = phase
     control.confirm_hold()
 
     def sample(*buttons):
@@ -375,29 +376,30 @@ def test_mapped_x_and_menu_toggle_independently_once_per_press():
             raw["precision_switch"],
         )[0]
 
-    assert sample(2) == "hold" and control.precision == "fine"  # Startup-held.
+    x_button, menu = 2, 7
+    assert sample(menu) == "hold" and control.precision == "fine"  # Startup-held.
     sample()
-    assert sample(2) == "hold" and control.precision == "normal"
-    assert sample(2) == "hold" and control.precision == "normal"
+    assert sample(menu) == "hold" and control.precision == "normal"
+    assert sample(menu) == "hold" and control.precision == "normal"
     sample()
-    sample(7)
+    sample(x_button)
     assert control.translation_strategy is TranslationStrategy.FIXED_ORIENTATION
     assert control.precision == "normal"
     sample()
-    sample(2, 7)
-    sample(7)
+    sample(menu, x_button)
+    sample(x_button)
     assert (
         control.precision == "normal"
         and control.translation_strategy is TranslationStrategy.FIXED_ORIENTATION
     )
     sample()
-    sample(2)
+    sample(menu)
     assert control.input_scale == 0.5
     sample()
     assert sample(4) in ("run", "center")
-    assert sample(4, 2) == "hold" and control.precision == "fine"
+    assert sample(4, menu) == "hold" and control.precision == "fine"
     control.confirm_hold()
-    assert sample(4) == "hold"  # Holding LB cannot re-arm after a rejected X.
+    assert sample(4) == "hold"  # Holding LB cannot re-arm after a rejected Menu press.
     sample()
     assert sample(4) == "run"
     pad.buttons[1] = 1
@@ -444,3 +446,30 @@ def test_precision_button_checks_binding_and_cancels_conflicts():
     c.observe(False, False)
     c.observe(False, False, precision_switch=True)
     assert c.precision == "fine"
+
+
+@pytest.mark.parametrize(
+    ("translation", "precision"),
+    [(2, None), (7, 2), (2, 7)],
+)
+def test_station_xbox_uses_one_binding_in_manual_workflows(tmp_path, translation, precision):
+    from test_plugin import make_robot, xbox_config
+    from lerobot_robot_outcome_piper.config import STATION_XBOX_GUID
+    from lerobot_robot_outcome_piper.workflows import _validate_workflow_configs
+
+    robot, _, _ = make_robot(tmp_path, mode="motion")
+    supplied = xbox_config(
+        device_guid=STATION_XBOX_GUID,
+        hold_button=4,
+        emergency_stop_button=1,
+        mode_switch_button=5,
+        home_button=3,
+        translation_switch_button=translation,
+        precision_switch_button=precision,
+    )
+    _, effective = _validate_workflow_configs(robot.config, supplied)
+    assert (effective.translation_switch_button, effective.precision_switch_button) == (2, 7)
+    assert (supplied.translation_switch_button, supplied.precision_switch_button) == (
+        translation,
+        precision,
+    )

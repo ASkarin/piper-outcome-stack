@@ -11,11 +11,15 @@ import sys
 import time
 from datetime import datetime, timezone
 
+TRANSLATION_STAGE = ("translation_switch_button", "按下并松开 X 键，只操作 X 键")
+PRECISION_STAGE = ("precision_switch_button", "按下并松开三横线 ≡ 菜单键，只操作菜单键")
 STAGES = (
     ("neutral", "松开所有按键、摇杆和扳机，保持不动"),
     ("hold_button", "按下并松开要用作遥操作控制的肩键，只操作这一个键"),
     ("mode_switch_button", "按下并松开 RB 键，只操作 RB 键"),
     ("emergency_stop_button", "按下并松开 B 键，只操作 B 键"),
+    TRANSLATION_STAGE,
+    PRECISION_STAGE,
     ("left_stick_right", "左摇杆向右推到底，再回中"),
     ("left_stick_up", "左摇杆向上推到底，再回中"),
     ("right_stick_right", "右摇杆向右推到底，再回中"),
@@ -116,7 +120,9 @@ def main(argv=None):
         "--hz", type=float, default=60, help="input sampling rate, not a robot control rate"
     )
     parser.add_argument(
-        "--buttons-only", action="store_true", help="measure neutral, LB, RB and B only"
+        "--buttons-only",
+        action="store_true",
+        help="measure neutral and the Xbox control buttons (LB, RB, B, X and Menu)",
     )
     parser.add_argument(
         "--home-only", action="store_true", help="measure neutral and Y for homing only"
@@ -130,7 +136,7 @@ def main(argv=None):
     parser.add_argument(
         "--precision-buttons",
         action="store_true",
-        help="measure X for gain and Menu for translation strategy",
+        help="measure X for translation strategy and Menu for normal/fine gain",
     )
     args = parser.parse_args(argv)
     if (
@@ -215,16 +221,9 @@ def main(argv=None):
                 if args.work_only:
                     stages = [STAGES[0], ("work_pose_button", "按下并松开 A 键，只操作 A 键")]
                 if args.translation_only:
-                    stages = [
-                        STAGES[0],
-                        ("translation_switch_button", "按下并松开 X 键，只操作 X 键"),
-                    ]
+                    stages = [STAGES[0], TRANSLATION_STAGE]
                 if args.precision_buttons:
-                    stages = [
-                        STAGES[0],
-                        ("precision_switch_button", "按下再松开 X"),
-                        ("translation_switch_button", "按下再松开三横线 ≡ 菜单键"),
-                    ]
+                    stages = [STAGES[0], TRANSLATION_STAGE, PRECISION_STAGE]
                 for stage, instruction in stages:
                     input(f"{instruction}；准备好后按 Enter，随后采样 {args.seconds:g} 秒：")
                     result = sample_stage(pygame, joystick, args.seconds, args.hz, emit)

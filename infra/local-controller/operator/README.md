@@ -77,7 +77,7 @@ with the current 50Hz defaults this is 1.25mm/tick (62.5mm/s per coordinate),
 0.25degree/tick and 3mm lead per coordinate. The deadzone is applied to the raw
 joystick axes before this gain, so selecting fine does not change its threshold.
 Gripper generation and A/Y preset
-trajectories retain their existing parameters. A/B sessions start in normal and C sessions start in fine. The active C pad uses X for normal/fine and Menu (≡) for translation strategy.
+trajectories retain their existing parameters. A/B sessions start in normal and C sessions start in fine. Across standalone Xbox teleoperation and A/B/C recording, X selects the translation strategy and Menu (≡) switches normal/fine.
 The selected gain persists across episodes and is saved in action telemetry.
 
 During recording, data eligibility follows the existing LB permission without
@@ -90,7 +90,7 @@ these frames remain eligible. Initial menu/typing delay and delay before `end`
 are excluded while LB permission is not active. A protective input rejection
 still excludes frames until a new permitted SDK command succeeds.
 
-Keyboard gain selection is available in preparation. In C, the X button also toggles gain during the episode after LB release, neutral controls and confirmed hold. The selected gain persists across episodes. Releasing LB still requires confirmed hold, neutral inputs and a
+Keyboard gain selection is available in preparation. Menu (≡) also toggles gain during manual teleoperation or a recording episode after LB release, neutral controls and confirmed hold. The selected gain persists across episodes. Releasing LB still requires confirmed hold, neutral inputs and a
 fresh LB press before movement. B-stop behavior is unchanged.
 
 With LB continuously held, brief stick centering captures one current joint hold

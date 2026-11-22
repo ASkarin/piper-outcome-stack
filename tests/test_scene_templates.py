@@ -28,7 +28,6 @@ def test_scene_templates_require_site_values_then_parse_without_devices(tmp_path
         with pytest.raises((ParsingError, ValueError, TypeError)):
             draccus.decode(RecordConfig if name == "record" else TeleoperateConfig, values)
         robot["safety_path"] = str(tmp_path / "synthetic-safety.json")
-        values["teleop"]["translation_switch_button"] = 2  # Synthetic binding only.
         values["teleop"]["work_pose_button"] = 0  # Synthetic parser input, not hardware evidence.
         if name == "record":
             robot["capture_timing"] = dict(
@@ -41,5 +40,6 @@ def test_scene_templates_require_site_values_then_parse_without_devices(tmp_path
         cfg = draccus.decode(RecordConfig if name == "record" else TeleoperateConfig, values)
         assert cfg.robot.scene.scene_id == "synthetic-new-table"
         assert cfg.teleop.work_pose_button == 0
+        assert (cfg.teleop.translation_switch_button, cfg.teleop.precision_switch_button) == (2, 7)
         if name == "teleoperate":
             assert cfg.robot.cameras == {} and cfg.robot.capture_timing is None

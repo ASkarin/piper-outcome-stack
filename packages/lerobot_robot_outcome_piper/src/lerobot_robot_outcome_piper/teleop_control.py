@@ -194,7 +194,7 @@ class TeleopControl:
             previous_precision = self._previous_precision
             self._previous_precision = precision_switch
             if precision_switch:
-                # Consume simultaneous edges so a held button cannot fire on X release.
+                # Consume simultaneous edges so a held button cannot fire on gain-button release.
                 self._previous_hold, self._previous_mode = hold, mode_switch
                 self._previous_home, self._previous_work = home, work
                 self._previous_translation = translation_switch
@@ -215,7 +215,7 @@ class TeleopControl:
                         hold, neutral, mode_switch or home or work or translation_switch
                     )
                 elif previous_precision is None:
-                    logging.info("[未切换] 请先释放启动时按住的 X。")
+                    logging.info("[未切换] 请先释放启动时按住的档位键。")
                 return "hold", self.epoch
             if self.pending_mode is not None and (
                 hold
@@ -495,7 +495,7 @@ class TeleopControl:
             self.select_precision(target, hold=hold, neutral=neutral, conflicting=conflicting)
         except ValueError as exc:
             self.mode_event = dict(accepted=False, precision=self.precision, reason=str(exc))
-            logging.info("[未切换] %s。松开 X，准备好再单击。", exc)
+            logging.info("[未切换] %s。松开档位键，准备好再单击。", exc)
         else:
             self.mode_event = dict(accepted=True, precision=target, input_scale=self.input_scale)
             logging.info("[档位] %s", "常规 100%" if target == "normal" else "精细 50%")

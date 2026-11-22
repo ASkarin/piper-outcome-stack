@@ -206,10 +206,25 @@ class AsyncOperatorHandler(logging.Handler):
 def print_controls(config):
     operator_message("[手柄] LB按住操作/松开保持；LT闭合/RT张开；B急停。")
     operator_message("RB切换平移/姿态模式：松LB回中后即可单击；等待“模式已就绪”，再按LB操作。")
-    remapped = getattr(config, "precision_switch_button", None) is not None
-    translation_key = "三横线 ≡" if remapped else "X"
-    if remapped:
-        operator_message("X 切换常规 / 精细档：松开 LB、摇杆扳机回中，保持确认后单击。")
+    from .config import (
+        STATION_XBOX_GUID,
+        STATION_XBOX_TRANSLATION_BUTTON,
+        STATION_XBOX_PRECISION_BUTTON,
+    )
+
+    labels = (
+        {STATION_XBOX_TRANSLATION_BUTTON: "X", STATION_XBOX_PRECISION_BUTTON: "三横线 ≡"}
+        if getattr(config, "device_guid", None) == STATION_XBOX_GUID
+        else {}
+    )
+    translation = config.translation_switch_button
+    translation_key = labels.get(translation, f"平移策略键（按钮 {translation}）")
+    precision = getattr(config, "precision_switch_button", None)
+    if precision is not None:
+        precision_key = labels.get(precision, f"档位键（按钮 {precision}）")
+        operator_message(
+            f"{precision_key} 切换常规 / 精细档。松开 LB、摇杆扳机回中，保持确认后单击。"
+        )
     operator_message(f"默认平移为腕部优先保持，{translation_key} 切换保持朝向（含 yaw）。")
     operator_message(
         f"{translation_key} 仅在平移模式、松 LB 回中且保持确认时切换。姿态模式绕抓取中心旋转。"

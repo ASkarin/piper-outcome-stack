@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from copy import copy
+from dataclasses import replace
 import math
 from typing import Any
 
@@ -10,7 +12,13 @@ from lerobot.robots import make_robot_from_config
 from lerobot.teleoperators import make_teleoperator_from_config
 
 from .console import operator_message
-from .config import OutcomePiperConfig, OutcomePiperXboxConfig
+from .config import (
+    OutcomePiperConfig,
+    OutcomePiperXboxConfig,
+    STATION_XBOX_GUID,
+    STATION_XBOX_TRANSLATION_BUTTON,
+    STATION_XBOX_PRECISION_BUTTON,
+)
 from .input_safety import motion_input_safety_scope
 from .processor import make_xbox_processor
 from .safety import load_motion_safety
@@ -26,6 +34,18 @@ def _validate_workflow_configs(
     if robot.execution_mode != "motion":
         raise ValueError("Xbox workflows require robot.execution_mode=motion")
     assert robot.safety_path is not None
+    if teleop.device_guid == STATION_XBOX_GUID and (
+        teleop.translation_switch_button != STATION_XBOX_TRANSLATION_BUTTON
+        or teleop.precision_switch_button != STATION_XBOX_PRECISION_BUTTON
+    ):
+        # Resolve the measured controller-wide layout before the processor or devices
+        # are constructed. Leave saved config objects unchanged for offline use.
+        teleop = replace(
+            teleop,
+            translation_switch_button=STATION_XBOX_TRANSLATION_BUTTON,
+            precision_switch_button=STATION_XBOX_PRECISION_BUTTON,
+        )
+        operator_message("[Xbox] 本次手动操作使用控制机实测键位。X 切平移策略，三横线 ≡ 切档。")
     return robot, teleop
 
 
@@ -153,6 +173,9 @@ def record(cfg: Any) -> Any:
     from .recording import record_with_telemetry
 
     robot_config, teleop_config = _validate_workflow_configs(cfg.robot, cfg.teleop)
+    if cfg.teleop is not teleop_config:
+        cfg = copy(cfg)
+        cfg.teleop = teleop_config  # The recorder constructs and logs its device from this config.
     if cfg.dataset.fps != teleop_config.control_hz:
         raise ValueError("dataset fps must match the measured Xbox control_hz")
     if cfg.dataset.push_to_hub:

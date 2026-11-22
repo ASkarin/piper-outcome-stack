@@ -106,7 +106,12 @@ def execute(monkeypatch):
 
         robot, teleop, processor = Robot(), Teleop(), Processor()
         robot_config = NS()
-        teleop_config = NS(control_hz=20, hold_settings=lambda: object())
+        teleop_config = NS(
+            control_hz=20,
+            translation_switch_button=2,
+            precision_switch_button=7,
+            hold_settings=lambda: object(),
+        )
         cfg = NS(
             robot=robot_config,
             teleop=teleop_config,

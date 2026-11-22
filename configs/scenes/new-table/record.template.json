@@ -81,7 +81,8 @@
     "ik_timeout_s": 0.015,
     "ik_residual_tolerance": 1e-05,
     "ik_min_singular_value": 0.005,
-    "translation_switch_button": null,
+    "translation_switch_button": 2,
+    "precision_switch_button": 7,
     "streaming_reference": {
       "period_s": 0.02,
       "ramp_time_s": 0.5,

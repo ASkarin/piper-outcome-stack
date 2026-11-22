@@ -397,7 +397,7 @@ def test_fine_batch_counts_eligible_successes_and_keeps_early_quit(goal, success
         ("fine", "3 cancelled", True),
         ("fine", "r", True),
         ("fine", "1", False),
-        ("fine", "1", True),  # Only normal was active; the final X press was paused.
+        ("fine", "1", True),  # Only normal was active; the final gain switch was paused.
         ("normal", "1", True),  # Normal approach, fine push, normal withdrawal.
         *[("fine", "1", True)] * (successes - 1),
     ]
