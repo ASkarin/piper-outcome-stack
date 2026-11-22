@@ -27,6 +27,10 @@ CONTROL_KEYS = (
 RAW_ACTION_KEYS = (*AXIS_KEYS, *CONTROL_KEYS)
 
 
+def xbox_control_keys(has_precision_switch):
+    return (*CONTROL_KEYS, "precision_switch") if has_precision_switch else CONTROL_KEYS
+
+
 class OutcomePiperXbox(Teleoperator):
     config_class = OutcomePiperXboxConfig
     name = "outcome_piper_xbox"
@@ -45,7 +49,8 @@ class OutcomePiperXbox(Teleoperator):
 
     @property
     def action_features(self) -> dict[str, type]:
-        return {**dict.fromkeys(AXIS_KEYS, float), **dict.fromkeys(CONTROL_KEYS, bool)}
+        controls = xbox_control_keys(self.config.precision_switch_button is not None)
+        return {**dict.fromkeys(AXIS_KEYS, float), **dict.fromkeys(controls, bool)}
 
     @property
     def feedback_features(self) -> dict[str, type]:
@@ -143,6 +148,9 @@ class OutcomePiperXbox(Teleoperator):
             self.config.emergency_stop_button,
             self.config.mode_switch_button,
             self.config.translation_switch_button,
+            self.config.precision_switch_button
+            if self.config.precision_switch_button is not None
+            else 0,
             self.config.home_button,
             self.config.work_pose_button if self.config.work_pose_button is not None else 0,
         ):
@@ -200,13 +208,10 @@ class OutcomePiperXbox(Teleoperator):
             request_input_emergency_stop("Xbox B/emergency-stop button pressed")
             return {
                 **dict.fromkeys(AXIS_KEYS, 0.0),
-                "hold": False,
-                "neutral": False,
+                **dict.fromkeys(
+                    xbox_control_keys(self.config.precision_switch_button is not None), False
+                ),
                 "emergency_stop": True,
-                "mode_switch": False,
-                "translation_switch": False,
-                "home": False,
-                "work": False,
             }
         hold = bool(self._joystick.get_button(self.config.hold_button))
         x = self._axis(self.config.axis_x, self.config.axis_signs[0])
@@ -227,6 +232,15 @@ class OutcomePiperXbox(Teleoperator):
             "neutral": neutral,
             "emergency_stop": False,
             "mode_switch": bool(self._joystick.get_button(self.config.mode_switch_button)),
+            **(
+                {
+                    "precision_switch": bool(
+                        self._joystick.get_button(self.config.precision_switch_button)
+                    )
+                }
+                if self.config.precision_switch_button is not None
+                else {}
+            ),
             "translation_switch": bool(
                 self._joystick.get_button(self.config.translation_switch_button)
             ),

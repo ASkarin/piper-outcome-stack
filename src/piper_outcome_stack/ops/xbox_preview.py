@@ -17,14 +17,20 @@ def preview_config(config_path, buttons_report):
     if report["status"] != "input_measured" or report["device"]["guid"] != cfg["device_guid"]:
         raise ValueError("measured button report must match the configured Xbox GUID")
     buttons = report["buttons"]
-    for key in ("hold_button", "emergency_stop_button"):
-        if cfg[key] != buttons[key]:
-            raise ValueError(f"measured {key} differs from configuration")
-    if "mode_switch_button" in cfg and cfg["mode_switch_button"] != buttons["mode_switch_button"]:
-        raise ValueError("measured RB differs from configuration")
-    cfg["mode_switch_button"] = buttons["mode_switch_button"]
-    if "translation_switch_button" in buttons:
-        cfg["translation_switch_button"] = buttons["translation_switch_button"]
+    remap = {"precision_switch_button", "translation_switch_button"}
+    if "precision_switch_button" in buttons and not remap <= buttons.keys():
+        raise ValueError("precision measurement requires both X and Menu bindings")
+    if buttons.keys() != remap:
+        for key in ("hold_button", "emergency_stop_button"):
+            if cfg[key] != buttons[key]:
+                raise ValueError(f"measured {key} differs from configuration")
+        if (
+            "mode_switch_button" in cfg
+            and cfg["mode_switch_button"] != buttons["mode_switch_button"]
+        ):
+            raise ValueError("measured RB differs from configuration")
+        cfg["mode_switch_button"] = buttons["mode_switch_button"]
+    cfg.update({key: buttons[key] for key in remap if key in buttons})
     return OutcomePiperXboxConfig(**cfg)
 
 
@@ -69,12 +75,13 @@ def main(argv=None):
                     raw["home"],
                     raw["work"],
                     raw["translation_switch"],
+                    precision_switch=raw.get("precision_switch", False),
                 )
                 xyz, rotation, gripper = input_deltas(
                     raw,
                     control.mode,
-                    cfg.xyz_step_m,
-                    cfg.rotation_step_rad,
+                    cfg.xyz_step_m * control.input_scale,
+                    cfg.rotation_step_rad * control.input_scale,
                     cfg.gripper_step_m,
                     control.translation_strategy,
                 )
@@ -93,6 +100,8 @@ def main(argv=None):
                     intent=intent,
                     epoch=epoch,
                     mode_event=control.mode_event,
+                    precision=control.precision,
+                    input_scale=control.input_scale,
                     pose_event=control.pose_event,
                     xyz_delta_m=xyz,
                     rotation_vector_rad=rotation,

@@ -13,6 +13,7 @@ class Input:
         self.neutral = True
         self.b = False
         self.work = False
+        self.precision_switch = False
 
     def get_action(self):
         self.calls += 1
@@ -23,6 +24,7 @@ class Input:
             emergency_stop=self.b,
             home=False,
             work=self.work,
+            precision_switch=self.precision_switch,
             mode_switch=False,
             translation_switch=False,
         )
@@ -76,7 +78,7 @@ def test_action_budget_holds_without_disabling(session, monkeypatch, count, seco
     assert session[0].state is PiperState.ACTIVE
 
 
-@pytest.mark.parametrize("cancel", ["release", "stick", "work"])
+@pytest.mark.parametrize("cancel", ["release", "stick", "work", "precision_switch"])
 def test_post_inference_cancel_never_sends_predicted_target(session, monkeypatch, cancel):
     settle(session)
     raw = Input()
@@ -84,6 +86,7 @@ def test_post_inference_cancel_never_sends_predicted_target(session, monkeypatch
         "release": ("hold", False),
         "stick": ("neutral", False),
         "work": ("work", True),
+        "precision_switch": ("precision_switch", True),
     }[cancel]
     candidate(monkeypatch, lambda: setattr(raw, field, value))
     result, rows = trial(session, raw)

@@ -206,10 +206,14 @@ class AsyncOperatorHandler(logging.Handler):
 def print_controls(config):
     operator_message("[手柄] LB按住操作/松开保持；LT闭合/RT张开；B急停。")
     operator_message("RB切换平移/姿态模式：松LB回中后即可单击；等待“模式已就绪”，再按LB操作。")
+    remapped = getattr(config, "precision_switch_button", None) is not None
+    translation_key = "三横线 ≡" if remapped else "X"
+    if remapped:
+        operator_message("X 切换常规 / 精细档：松开 LB、摇杆扳机回中，保持确认后单击。")
+    operator_message(f"默认平移为腕部优先保持，{translation_key} 切换保持朝向（含 yaw）。")
     operator_message(
-        "默认平移：腕部优先保持，XYZ控制抓取中心；右摇杆左右无动作。X切换保持朝向（含yaw）。",
+        f"{translation_key} 仅在平移模式、松 LB 回中且保持确认时切换。姿态模式绕抓取中心旋转。"
     )
-    operator_message("X仅在平移模式、松LB回中且保持确认时切换；姿态模式绕抓取中心旋转。")
     keys = (
         "A进入工作姿态，Y回零" if getattr(config, "work_pose_button", None) is not None else "Y回零"
     )

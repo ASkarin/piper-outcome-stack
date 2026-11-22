@@ -31,7 +31,7 @@ from .input_safety import request_input_emergency_stop, request_input_fault_hold
 from .workspace import workspace_pose_allowed
 from dataclasses import asdict
 from .safety import ACTION_KEYS, JOINT_KEYS, MotionSafety, step_within_limit, check_joint_feedback
-from .teleoperator import RAW_ACTION_KEYS, AXIS_KEYS, CONTROL_KEYS
+from .teleoperator import AXIS_KEYS, xbox_control_keys
 from .teleop_control import TeleopControl, TeleopMode, TranslationStrategy, TeleopState
 
 
@@ -109,10 +109,13 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
     gripper_reference: dict | None = None
     streaming_reference: dict | None = None
     initial_precision: str = "normal"
+    has_precision_switch: bool = False
     control: TeleopControl = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.control = TeleopControl(initial_precision=self.initial_precision)
+        self._control_keys = xbox_control_keys(self.has_precision_switch)
+        self._raw_keys = frozenset((*AXIS_KEYS, *self._control_keys))
         if self.streaming_reference is not None:
             from .continuous_reference import ReferenceSettings
 
@@ -168,6 +171,7 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
             "pose_timing": self.pose_timing,
             "streaming_reference": self.streaming_reference,
             "initial_precision": self.initial_precision,
+            "has_precision_switch": self.has_precision_switch,
             "gripper_reference": self.gripper_reference,
             "max_xyz_step_m": self.max_xyz_step_m,
             "max_rotation_step_rad": self.max_rotation_step_rad,
@@ -344,9 +348,9 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
         from .stage_timing import mark_preparation_pose
 
         mark_preparation_pose(False)
-        if set(action) != set(RAW_ACTION_KEYS):
+        if action.keys() != self._raw_keys:
             raise OutcomePiperValidationError("Xbox action does not match the input/control schema")
-        if any(type(action[key]) is not bool for key in CONTROL_KEYS):
+        if any(type(action[key]) is not bool for key in self._control_keys):
             raise OutcomePiperValidationError("Xbox control flags must be boolean")
         if action["emergency_stop"]:
             self.control.stop(True)
@@ -367,6 +371,7 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
             action["home"],
             action["work"],
             action["translation_switch"],
+            precision_switch=action["precision_switch"] if self.has_precision_switch else False,
         )
         xyz_delta, rotation_delta, gripper_delta = input_deltas(
             dict(zip(AXIS_KEYS, axes)),
@@ -648,7 +653,7 @@ class OutcomePiperXboxProcessor(RobotActionProcessorStep):
         self, features: dict[PipelineFeatureType, dict[str, PolicyFeature]]
     ) -> dict[PipelineFeatureType, dict[str, PolicyFeature]]:
         action_features = features[PipelineFeatureType.ACTION]
-        for key in RAW_ACTION_KEYS:
+        for key in self._raw_keys:
             action_features.pop(key, None)
         for key in ACTION_KEYS:
             action_features[key] = PolicyFeature(type=FeatureType.ACTION, shape=(1,))
@@ -680,6 +685,7 @@ def make_xbox_processor(
     gripper_reference: dict | None = None,
     streaming_reference: dict | None = None,
     initial_precision: str = "normal",
+    has_precision_switch: bool = False,
 ) -> RobotProcessorPipeline[tuple[RobotAction, dict[str, Any]], RobotAction]:
     return RobotProcessorPipeline(
         steps=[
@@ -690,6 +696,7 @@ def make_xbox_processor(
                 pose_timing=pose_timing,
                 streaming_reference=streaming_reference,
                 initial_precision=initial_precision,
+                has_precision_switch=has_precision_switch,
                 gripper_reference=gripper_reference,
                 max_xyz_step_m=max_xyz_step_m,
                 max_rotation_step_rad=max_rotation_step_rad,

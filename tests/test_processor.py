@@ -109,6 +109,7 @@ def test_processor_save_load_round_trip_preserves_frozen_configuration(tmp_path:
         ik_residual_tolerance=0.001,
         ik_min_singular_value=0.001,
         initial_precision=precision,
+        has_precision_switch=precision == "fine",
     )
     config_filename = "outcome_piper_xbox_processor.json"
     original.save_pretrained(tmp_path, config_filename=config_filename)

@@ -2,6 +2,8 @@
 
 Default 2026-09-20: use piper record, 50 Hz control/Dataset and 640×480 RGBD60. Current target-to-feedback joint limit is 10 degrees; SDK speed setting is 50%. Gripper reference is capped at 120 mm/s with 8 mm lead, within 0–120 mm command range and 15 mm execution step. Physical 120 mm travel is not yet calibrated. Exact operator commands: [shortcuts](../../infra/local-controller/operator/README.md).
 
+For the active stage C Push-T capture profile (2026-11-22), X switches normal/fine gain and Menu (≡) selects the translation strategy. Both bindings were measured on the connected Xbox. For another C controller, `xbox-input --precision-buttons --index <device> --output <new-dir>` measures X and Menu. The earlier layout below applies to profiles with only the translation switch configured.
+
 Default translation controls the grasp center (flange +Z 105 mm). It first holds
 J4-J6 and solves J1-J3; if necessary a position-only solve allows wrist motion
 with a 100:1 change penalty. No orientation constraint is imposed in this mode.

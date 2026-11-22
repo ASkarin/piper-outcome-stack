@@ -94,6 +94,7 @@ class OutcomePiperXboxConfig(TeleoperatorConfig):
     ik_timeout_s: float
     ik_residual_tolerance: float
     ik_min_singular_value: float
+    precision_switch_button: int | None = None
     work_pose_button: int | None = None
     work_joint_rad: tuple[float, ...] | None = None
     work_gripper_m: float | None = None
@@ -155,7 +156,21 @@ class OutcomePiperXboxConfig(TeleoperatorConfig):
             )
             != 5
         ):
-            raise ValueError("hold, home, RB, X and emergency-stop buttons must be distinct")
+            raise ValueError(
+                "hold, home, RB, translation and emergency-stop buttons must be distinct"
+            )
+        if self.precision_switch_button is not None:
+            if type(self.precision_switch_button) is not int or self.precision_switch_button < 0:
+                raise ValueError("precision switch button must be a measured non-negative index")
+            if self.precision_switch_button in (
+                self.hold_button,
+                self.emergency_stop_button,
+                self.mode_switch_button,
+                self.home_button,
+                self.work_pose_button,
+                self.translation_switch_button,
+            ):
+                raise ValueError("precision switch button must be distinct")
         work = (self.work_pose_button, self.work_joint_rad, self.work_gripper_m)
         if any(v is not None for v in work):
             if any(v is None for v in work):

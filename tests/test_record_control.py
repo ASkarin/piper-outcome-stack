@@ -397,8 +397,9 @@ def test_fine_batch_counts_eligible_successes_and_keeps_early_quit(goal, success
         ("fine", "3 cancelled", True),
         ("fine", "r", True),
         ("fine", "1", False),
-        ("normal", "1", True),
-        *[("fine", "1", True)] * successes,
+        ("fine", "1", True),  # Only normal was active; the final X press was paused.
+        ("normal", "1", True),  # Normal approach, fine push, normal withdrawal.
+        *[("fine", "1", True)] * (successes - 1),
     ]
     audit = Mock(attempt=0, pending=[], demonstration=DemonstrationTracker())
     audit.dataset.num_episodes = 0
@@ -435,15 +436,22 @@ def test_fine_batch_counts_eligible_successes_and_keeps_early_quit(goal, success
             kw["teleop_action_processor"](({"hold": False, "neutral": True}, {}))
             if kw["dataset"] is not None:
                 assert c.precision == attempts[audit.attempt][0]
-                audit.pending.append(0)
-                audit.demonstration.observe(
-                    {
-                        "demonstration_pause": {
-                            "manual": not attempts[audit.attempt][2],
-                            "protection_reason": None,
+                frames = [(c.precision, attempts[audit.attempt][2])]
+                if audit.attempt == 4:
+                    frames = [("normal", True), ("fine", False)]
+                elif audit.attempt == 5:
+                    frames = [("normal", True), ("fine", True), ("normal", True)]
+                for gain, eligible in frames:
+                    audit.pending.append(len(audit.pending))
+                    audit.demonstration.observe(
+                        {
+                            "precision": gain,
+                            "demonstration_pause": {
+                                "manual": not eligible,
+                                "protection_reason": None,
+                            },
                         }
-                    }
-                )
+                    )
             time.sleep(0.0002)
         pytest.fail(f"batch stalled during {c.recording_phase}, attempt {audit.attempt}")
 
@@ -474,9 +482,12 @@ def test_fine_batch_counts_eligible_successes_and_keeps_early_quit(goal, success
     assert outcomes[2]["eligible_frames"] == 0 and not outcomes[2]["data_valid"]
     assert outcomes[3]["precision"] == "normal" and outcomes[3]["data_valid"]
     assert len(outcomes) == 4 + successes
+    assert outcomes[4]["precision"] == "mixed" and outcomes[4]["data_valid"]
+    assert set(outcomes[4]["eligible_frames_by_precision"]) == {"normal", "fine"}
+    assert outcomes[3]["eligible_frames_by_precision"] == {"normal": 1}
     assert all(
         o["task_outcome"] == "success" and o["precision"] == "fine" and o["data_valid"]
-        for o in outcomes[4:]
+        for o in outcomes[5:]
     )
     audit.dataset.finalize.assert_called_once()
     assert f"fine 有效成功示范 {successes}/{goal}" in capsys.readouterr().out

@@ -449,6 +449,14 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     robot.config.scene = scene
     fine_batch = c_skill and not redo
     c = TeleopControl(initial_precision="fine" if fine_batch else "normal")
+    send = robot.send_action
+
+    def send_with_precision(action):
+        result = send(action)
+        robot.last_action_telemetry["precision"] = c.precision
+        return result
+
+    monkeypatch.setattr(robot, "send_action", send_with_precision)
     c.gripper_target = 0.03  # Synthetic successful gripper command.
     robot.prepare_recording_gripper = lambda epoch: {"initialized": False}
 

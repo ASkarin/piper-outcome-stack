@@ -4,7 +4,7 @@ import math
 import time
 from copy import deepcopy
 
-from lerobot_robot_outcome_piper.teleoperator import AXIS_KEYS, CONTROL_KEYS
+from lerobot_robot_outcome_piper.teleoperator import AXIS_KEYS, xbox_control_keys
 from lerobot_robot_outcome_piper.teleop_control import TeleopState
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.workflows import _processor
@@ -40,8 +40,10 @@ class WorkPoseInput:
         if raw["emergency_stop"]:
             self.robot.request_emergency_stop("Xbox B during startup A")
             raise RuntimeError("Xbox B: startup A stopped")
-        conflict = not raw["neutral"] or any(
-            raw[k] for k in ("hold", "home", "work", "mode_switch", "translation_switch")
+        conflict = (
+            not raw["neutral"]
+            or raw.get("precision_switch", False)
+            or any(raw[k] for k in ("hold", "home", "work", "mode_switch", "translation_switch"))
         )
         if conflict and not self.cancelled:
             self.cancelled = True
@@ -68,6 +70,7 @@ def prepare_work_pose(
     control.recording_phase = "preparing"
     pipeline = _processor(robot.config, config)
     pipeline.steps[0].control = control
+    controls = xbox_control_keys(getattr(config, "precision_switch_button", None) is not None)
     stage = "settle"
     try:
         print(
@@ -84,7 +87,7 @@ def prepare_work_pose(
                 return {"status": "cancelled_held", "hold_confirmed": control.hold_confirmed}
             raw = {
                 **dict.fromkeys(AXIS_KEYS, 0.0),
-                **dict.fromkeys(CONTROL_KEYS, False),
+                **dict.fromkeys(controls, False),
                 "neutral": True,
                 "hold": stage == "move",
                 "work": stage == "select",

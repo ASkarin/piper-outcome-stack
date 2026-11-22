@@ -13,6 +13,7 @@ class DemonstrationTracker:
         self.protection_reason = None
         self.previous_eligible = True
         self.eligible_frames = 0
+        self.eligible_frames_by_precision = {}
         self.segment_id = 0
 
     def observe(self, action):
@@ -39,6 +40,12 @@ class DemonstrationTracker:
             self.segment_id += 1
         self.previous_eligible = eligible
         self.eligible_frames += int(eligible)
+        if eligible and "precision" in action:
+            precision = action["precision"]
+            if precision not in ("normal", "fine"):
+                raise ValueError(f"unknown recorded Xbox precision: {precision!r}")
+            counts = self.eligible_frames_by_precision
+            counts[precision] = counts.get(precision, 0) + 1
         return {
             "eligible": eligible,
             "segment_id": self.segment_id,

@@ -220,7 +220,8 @@ class EpisodeControls:
             hold=raw["hold"],
             neutral=raw["neutral"],
             conflicting=any(
-                raw.get(k, False) for k in ("mode_switch", "translation_switch", "home", "work")
+                raw.get(k, False)
+                for k in ("mode_switch", "translation_switch", "precision_switch", "home", "work")
             ),
         )
 
@@ -406,7 +407,14 @@ def run_interactive_episodes(
                 raw.get("hold", True)
                 or not raw.get("neutral", False)
                 or any(
-                    raw.get(k, False) for k in ("mode_switch", "translation_switch", "home", "work")
+                    raw.get(k, False)
+                    for k in (
+                        "mode_switch",
+                        "translation_switch",
+                        "precision_switch",
+                        "home",
+                        "work",
+                    )
                 )
             ):
                 ui.request = None
@@ -496,12 +504,24 @@ def run_interactive_episodes(
                 counts_toward_goal = True
                 if target_precision is not None:
                     eligible = audit.demonstration.eligible_frames
-                    batch_info = dict(precision=control.precision, eligible_frames=eligible)
+                    by_precision = dict(audit.demonstration.eligible_frames_by_precision)
+                    if sum(by_precision.values()) != eligible:
+                        raise ValueError(
+                            "targeted collection requires precision on every eligible frame"
+                        )
+                    precision = (
+                        "mixed"
+                        if len(by_precision) > 1
+                        else next(iter(by_precision), control.precision)
+                    )
+                    batch_info = dict(
+                        precision=precision,
+                        eligible_frames=eligible,
+                        eligible_frames_by_precision=by_precision,
+                    )
                     data_valid = eligible > 0
                     counts_toward_goal = (
-                        request[1] == "success"
-                        and control.precision == target_precision
-                        and data_valid
+                        request[1] == "success" and by_precision.get(target_precision, 0) > 0
                     )
                 audit.emit(
                     "episode_save_requested",

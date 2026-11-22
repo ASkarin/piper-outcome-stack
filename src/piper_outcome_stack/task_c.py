@@ -130,15 +130,23 @@ def capture_manifest(sessions):
             if not is_successful_demonstration(outcome):
                 excluded.append(dict(episode=index, outcome=outcome["task_outcome"]))
                 continue
-            if required_precision is not None and outcome["precision"] != required_precision:
-                excluded.append(
-                    dict(
-                        episode=index,
-                        outcome=outcome["task_outcome"],
-                        precision=outcome["precision"],
-                    )
+            if required_precision is not None:
+                # Older targeted captures used one gain throughout each episode.
+                counts = outcome.get("eligible_frames_by_precision")
+                has_target = (
+                    counts.get(required_precision, 0) > 0
+                    if counts is not None
+                    else outcome["precision"] == required_precision
                 )
-                continue
+                if not has_target:
+                    excluded.append(
+                        dict(
+                            episode=index,
+                            outcome=outcome["task_outcome"],
+                            precision=outcome["precision"],
+                        )
+                    )
+                    continue
             task = outcome["task"]
             if dataset.meta.episodes["tasks"][index] != [task]:
                 raise ValueError("C task text differs from converted dataset")

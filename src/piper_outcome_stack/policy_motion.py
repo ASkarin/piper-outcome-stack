@@ -25,8 +25,10 @@ class PolicyInput:
         if raw["emergency_stop"]:
             self.robot.request_emergency_stop("Xbox B during policy trial")
             raise RuntimeError("Xbox B: policy trial stopped")
-        neutral = raw["neutral"] and not any(
-            raw[k] for k in ("home", "work", "mode_switch", "translation_switch")
+        neutral = (
+            raw["neutral"]
+            and not raw.get("precision_switch", False)
+            and not any(raw[k] for k in ("home", "work", "mode_switch", "translation_switch"))
         )
         # A conflicting input disarms. Keeping LB held cannot rearm the next tick.
         return {**raw, "hold": raw["hold"] and neutral, "neutral": neutral}

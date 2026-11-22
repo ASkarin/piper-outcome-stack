@@ -65,7 +65,7 @@ def test_button_mapping_requires_distinct_actual_presses():
         "mode_switch_button": 5,
     }
     stages["emergency_stop_button"]["pressed_buttons"] = [4]
-    with pytest.raises(ValueError, match="same button"):
+    with pytest.raises(ValueError, match="distinct"):
         xbox_input.measured_buttons(stages)
     stages["emergency_stop_button"]["pressed_buttons"] = []
     with pytest.raises(ValueError, match="exactly one"):

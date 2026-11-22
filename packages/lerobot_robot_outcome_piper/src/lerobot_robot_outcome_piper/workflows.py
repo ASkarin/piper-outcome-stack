@@ -40,6 +40,7 @@ def _processor(
         pose_timing=teleop.pose_timing,
         streaming_reference=teleop.streaming_reference,
         initial_precision=initial_precision,
+        has_precision_switch=teleop.precision_switch_button is not None,
         gripper_reference=teleop.gripper_reference,
         max_xyz_step_m=teleop.xyz_step_m,
         max_rotation_step_rad=teleop.rotation_step_rad,

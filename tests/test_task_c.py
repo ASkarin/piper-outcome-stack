@@ -97,3 +97,57 @@ def test_outcome_is_independent_of_program_status_and_grouped_by_skill(tmp_path,
     path.write_text(json.dumps(report))
     with pytest.raises(ValueError, match="not task trials"):
         label(path, "failure")
+
+
+def test_batch_manifest_keeps_the_whole_mixed_demonstration_and_older_fine_rows(
+    tmp_path, monkeypatch
+):
+    from lerobot.datasets import lerobot_dataset
+    from lerobot_robot_outcome_piper import action_audit
+    from piper_outcome_stack import training_selection
+
+    context = dict(task_family="C", start_id=task_c.POSITION, skill_id=task_c.SKILL)
+    config = dict(
+        dataset=dict(root=str(tmp_path / "dataset"), repo_id="test/pusht"),
+        recording_split="train",
+        recording_context=context,
+        recording_target_precision="fine",
+    )
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    base = dict(
+        task=task_c.INSTRUCTION,
+        task_context=context,
+        intended_split="train",
+        task_outcome="success",
+        data_valid=True,
+        session="one",
+    )
+    mixed = dict(
+        base,
+        precision="mixed",
+        eligible_frames_by_precision={"normal": 5, "fine": 5},
+        source_episode_index=0,
+    )
+    outcomes = {
+        0: mixed,
+        1: mixed,
+        2: dict(base, precision="fine"),
+        3: dict(base, precision="normal", eligible_frames_by_precision={"normal": 5}),
+    }
+    ds = NS(
+        repo_id="test/pusht",
+        num_episodes=4,
+        meta=NS(
+            episodes=dict(
+                tasks=[[task_c.INSTRUCTION]] * 4,
+                dataset_from_index=[0, 5, 10, 15],
+                dataset_to_index=[5, 10, 15, 20],
+            )
+        ),
+    )
+    monkeypatch.setattr(lerobot_dataset, "LeRobotDataset", lambda *a, **kw: ds)
+    monkeypatch.setattr(action_audit, "verify_telemetry", lambda *a: None)
+    monkeypatch.setattr(training_selection, "xbox_outcomes", lambda _: outcomes)
+    selection = task_c.capture_manifest([tmp_path])["sources"]["train"][0]
+    assert [s["dataset_episode"] for s in selection["segments"]] == [0, 1, 2]
+    assert selection["excluded"] == [dict(episode=3, outcome="success", precision="normal")]

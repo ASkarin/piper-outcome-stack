@@ -337,3 +337,110 @@ def test_entirely_protected_capture_is_not_a_training_dataset(tmp_path):
     with pytest.raises(ValueError, match="no eligible"):
         convert(raw, out, "local/no-valid-segment")
     assert not out.exists() and json.loads((raw / "capture.json").read_text())["status"] == "closed"
+
+
+def test_mapped_x_and_menu_toggle_independently_once_per_press():
+    from test_plugin import FakeJoystick, xbox_config
+    from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox
+    from lerobot_robot_outcome_piper.teleop_control import TranslationStrategy
+
+    pad = FakeJoystick()
+    pad.buttons = [0] * 12
+    pad.axes = [0.0, 0.0, 0.0, 0.0, -1.0, -1.0]
+    cfg = xbox_config(
+        hold_button=4,
+        emergency_stop_button=1,
+        mode_switch_button=5,
+        home_button=3,
+        translation_switch_button=7,
+        precision_switch_button=2,
+    )
+    xbox = OutcomePiperXbox(cfg, joystick_factory=lambda guid: pad)
+    xbox.connect()
+    control = TeleopControl(initial_precision="fine")
+    control.recording_phase = "recording"
+    control.confirm_hold()
+
+    def sample(*buttons):
+        pad.buttons[:] = [int(i in buttons) for i in range(len(pad.buttons))]
+        raw = xbox.get_action()
+        assert set(raw) == set(xbox.action_features)
+        return control.observe(
+            raw["hold"],
+            raw["neutral"],
+            raw["mode_switch"],
+            raw["home"],
+            raw["work"],
+            raw["translation_switch"],
+            raw["precision_switch"],
+        )[0]
+
+    assert sample(2) == "hold" and control.precision == "fine"  # Startup-held.
+    sample()
+    assert sample(2) == "hold" and control.precision == "normal"
+    assert sample(2) == "hold" and control.precision == "normal"
+    sample()
+    sample(7)
+    assert control.translation_strategy is TranslationStrategy.FIXED_ORIENTATION
+    assert control.precision == "normal"
+    sample()
+    sample(2, 7)
+    sample(7)
+    assert (
+        control.precision == "normal"
+        and control.translation_strategy is TranslationStrategy.FIXED_ORIENTATION
+    )
+    sample()
+    sample(2)
+    assert control.input_scale == 0.5
+    sample()
+    assert sample(4) in ("run", "center")
+    assert sample(4, 2) == "hold" and control.precision == "fine"
+    control.confirm_hold()
+    assert sample(4) == "hold"  # Holding LB cannot re-arm after a rejected X.
+    sample()
+    assert sample(4) == "run"
+    pad.buttons[1] = 1
+    assert xbox.get_action()["emergency_stop"] and not xbox.get_action()["precision_switch"]
+    xbox.disconnect()
+
+
+@pytest.mark.parametrize("phase", ["review", "saving", "finalizing"])
+def test_precision_button_in_unavailable_phase_is_not_deferred(phase):
+    c = TeleopControl(initial_precision="fine")
+    c.recording_phase = phase
+    c.confirm_hold()
+    c.observe(False, True)
+    c.observe(False, True, precision_switch=True)
+    assert c.precision == "fine" and not c.mode_event["accepted"]
+    c.recording_phase = "preparing"
+    c.observe(False, True, precision_switch=True)
+    assert c.precision == "fine"
+    c.observe(False, True)
+    c.observe(False, True, precision_switch=True)
+    assert c.precision == "normal"
+
+
+def test_precision_button_checks_binding_and_cancels_conflicts():
+    from test_plugin import xbox_config, FakeJoystick
+    from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox
+    from lerobot_robot_outcome_piper.errors import OutcomePiperStateError
+
+    with pytest.raises(ValueError, match="distinct"):
+        xbox_config(precision_switch_button=5, translation_switch_button=5)
+    xbox = OutcomePiperXbox(
+        xbox_config(precision_switch_button=11), joystick_factory=lambda _: FakeJoystick()
+    )
+    with pytest.raises(OutcomePiperStateError, match="axis/button layout"):
+        xbox.connect()
+
+    c = TeleopControl(initial_precision="fine")
+    c.observe(False, True)
+    c.observe(False, True, mode_switch=True)  # RB selected while hold is unconfirmed.
+    assert c.pending_mode is not None
+    c.observe(False, True, precision_switch=True)
+    assert c.pending_mode is None and c.precision == "fine"
+    c.confirm_hold()
+    c.observe(False, False)
+    c.observe(False, False, precision_switch=True)
+    assert c.precision == "fine"

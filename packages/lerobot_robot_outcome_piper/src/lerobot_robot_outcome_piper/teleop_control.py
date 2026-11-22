@@ -66,6 +66,7 @@ class TeleopControl:
         self._pending_mode_phase = None
         self.translation_strategy = TranslationStrategy.WRIST_PRIORITY
         self._previous_translation = None
+        self._previous_precision = None
         self._previous_mode = None
         self.mode_event = None
         self.reference_state = None
@@ -167,6 +168,7 @@ class TeleopControl:
             self._pending_mode_phase = None
             self.translation_strategy = TranslationStrategy.WRIST_PRIORITY
             self._previous_translation = None
+            self._previous_precision = None
             self._previous_mode = None
             self.mode_event = None
             self.orientation_target = None
@@ -181,13 +183,40 @@ class TeleopControl:
         home: bool = False,
         work: bool = False,
         translation_switch: bool = False,
+        precision_switch: bool = False,
     ) -> tuple[str, int]:
         with self._lock:
             self.mode_event = None
-            if mode_switch or home or work or translation_switch:
+            if mode_switch or home or work or translation_switch or precision_switch:
                 self._center_run_epoch = None
             if self.state in (TeleopState.FAULT, TeleopState.E_STOP):
                 return "wait", self.epoch
+            previous_precision = self._previous_precision
+            self._previous_precision = precision_switch
+            if precision_switch:
+                # Consume simultaneous edges so a held button cannot fire on X release.
+                self._previous_hold, self._previous_mode = hold, mode_switch
+                self._previous_home, self._previous_work = home, work
+                self._previous_translation = translation_switch
+                self._armed = False
+                if self.pending_mode is not None:
+                    self._cancel_pending_mode("conflicting button")
+                    return "hold", self.epoch
+                if self.state in (
+                    TeleopState.RUNNING,
+                    TeleopState.CENTERING,
+                    TeleopState.CENTERED,
+                    TeleopState.POSE_READY,
+                    TeleopState.POSE_MOVING,
+                ):
+                    self.request_hold("mode_switch")
+                if previous_precision is False:
+                    self._toggle_precision(
+                        hold, neutral, mode_switch or home or work or translation_switch
+                    )
+                elif previous_precision is None:
+                    logging.info("[未切换] 请先释放启动时按住的 X。")
+                return "hold", self.epoch
             if self.pending_mode is not None and (
                 hold
                 or not neutral
@@ -226,7 +255,7 @@ class TeleopControl:
                 self.mode_event = {"accepted": False, "reason": "conflicting buttons"}
                 if self.state in (TeleopState.POSE_READY, TeleopState.POSE_MOVING):
                     self.request_hold()
-                logging.info("[未切换] X不能与RB、A或Y同时按下。")
+                logging.info("[未切换] 平移策略键不能与 RB、A 或 Y 同时按下。")
                 return "hold", self.epoch
             if translation_edge or translation_startup:
                 accepted = (
@@ -263,7 +292,7 @@ class TeleopControl:
                         else "保持朝向"
                     )
                     if accepted
-                    else "未切换：请在平移模式松开LB、回中并等待保持确认，再按X。",
+                    else "未切换：请在平移模式松开LB、回中并等待保持确认，再按平移策略键。",
                 )
                 return "hold", self.epoch
             home_edge = self._previous_home is False and home
@@ -457,6 +486,19 @@ class TeleopControl:
                 )
             )
             return intent, self.epoch
+
+    def _toggle_precision(self, hold, neutral, conflicting):
+        target = "normal" if self.precision == "fine" else "fine"
+        try:
+            if self.recording_phase not in (None, "preparing", "recording"):
+                raise ValueError("当前阶段不接受切档")
+            self.select_precision(target, hold=hold, neutral=neutral, conflicting=conflicting)
+        except ValueError as exc:
+            self.mode_event = dict(accepted=False, precision=self.precision, reason=str(exc))
+            logging.info("[未切换] %s。松开 X，准备好再单击。", exc)
+        else:
+            self.mode_event = dict(accepted=True, precision=target, input_scale=self.input_scale)
+            logging.info("[档位] %s", "常规 100%" if target == "normal" else "精细 50%")
 
     def _apply_mode(self, target):
         self.mode = target

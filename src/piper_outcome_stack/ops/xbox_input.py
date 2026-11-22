@@ -97,7 +97,7 @@ def measured_buttons(stages, keys=("hold_button", "emergency_stop_button", "mode
             raise ValueError(f"{key}: expected exactly one measured button, got {pressed}")
         result[key] = pressed[0]
     if len(set(result.values())) != len(keys):
-        raise ValueError("shoulder and B measurements selected the same button")
+        raise ValueError("measurements must identify distinct buttons")
     return result
 
 
@@ -127,9 +127,25 @@ def main(argv=None):
     parser.add_argument(
         "--translation-only", action="store_true", help="measure neutral and X only"
     )
+    parser.add_argument(
+        "--precision-buttons",
+        action="store_true",
+        help="measure X for gain and Menu for translation strategy",
+    )
     args = parser.parse_args(argv)
-    if sum((args.home_only, args.buttons_only, args.work_only, args.translation_only)) > 1:
-        parser.error("select one of --home-only, --work-only or --buttons-only")
+    if (
+        sum(
+            (
+                args.home_only,
+                args.buttons_only,
+                args.work_only,
+                args.translation_only,
+                args.precision_buttons,
+            )
+        )
+        > 1
+    ):
+        parser.error("select one button measurement mode")
     if not all(math.isfinite(v) and v > 0 for v in (args.seconds, args.hz)):
         parser.error("seconds and hz must be finite and positive")
     if not args.list and (args.index is None or args.output is None):
@@ -203,20 +219,19 @@ def main(argv=None):
                         STAGES[0],
                         ("translation_switch_button", "按下并松开 X 键，只操作 X 键"),
                     ]
+                if args.precision_buttons:
+                    stages = [
+                        STAGES[0],
+                        ("precision_switch_button", "按下再松开 X"),
+                        ("translation_switch_button", "按下再松开三横线 ≡ 菜单键"),
+                    ]
                 for stage, instruction in stages:
                     input(f"{instruction}；准备好后按 Enter，随后采样 {args.seconds:g} 秒：")
                     result = sample_stage(pygame, joystick, args.seconds, args.hz, emit)
                     report["stages"][stage] = result
                     print(json.dumps(dict(stage=stage, **result), ensure_ascii=False))
-                report["buttons"] = (
-                    measured_buttons(report["stages"], ("translation_switch_button",))
-                    if args.translation_only
-                    else measured_buttons(report["stages"], ("home_button",))
-                    if args.home_only
-                    else measured_buttons(report["stages"], ("work_pose_button",))
-                    if args.work_only
-                    else measured_buttons(report["stages"])
-                )
+                button_stages = [key for key, _ in stages if key.endswith("_button")]
+                report["buttons"] = measured_buttons(report["stages"], button_stages)
                 report["status"] = "input_measured"
                 emit("measurement_complete", buttons=report["buttons"])
             except BaseException as exc:
