@@ -7,13 +7,32 @@ import torch
 from piper_policy import policy_execution as policy_contract
 
 
+def compare_reference_chunk(chunk, expected, sample):
+    chunk, expected = np.asarray(chunk), np.asarray(expected)
+    if chunk.shape != expected.shape or chunk.ndim != 2 or chunk.shape[1] != 7 or not len(chunk):
+        raise ValueError(f"reference chunk shape differs: sample={sample}")
+    delta = np.abs(chunk - expected)
+    joint, grip = float(delta[:, :6].max()), float(delta[:, 6].max())
+    if not (joint < 1e-4 and grip < 1e-5):
+        raise ValueError(f"reference mismatch: sample={sample}, joint={joint}, gripper={grip}")
+    return dict(joint_rad=joint, gripper_m=grip)
+
+
+def recorded_target_check(state, target, safety):
+    from lerobot_robot_outcome_piper.execution_constraints import check_execution_target
+
+    try:
+        check_execution_target(state, target, safety)
+    except ValueError as exc:
+        return dict(status="rejected", reason=str(exc))
+    return dict(status="passed")
+
+
 def verify_reference_inputs(predictor, path, safety, *, warmup=30):
     """Reproduce recorded reference chunks, check first targets, then warm up.
 
     Returns (images, states, rows); each row keeps the target check as a report entry.
     """
-    from lerobot_robot_outcome_piper.execution_constraints import check_execution_target
-
     with np.load(path) as data:
         images, states = data["images"], data["states"]
         expected = data["expected_absolute_chunks"]
@@ -25,16 +44,14 @@ def verify_reference_inputs(predictor, path, safety, *, warmup=30):
         if seeds is not None:
             torch.manual_seed(int(seeds[i]))
         chunk = predictor.predict(images[i], states[i])
-        delta = np.abs(chunk - expected[i])
-        joint, grip = float(delta[:, :6].max()), float(delta[:, 6].max())
-        if joint >= 1e-4 or grip >= 1e-5:
-            raise ValueError(f"reference mismatch: sample={i}, joint={joint}, gripper={grip}")
-        try:
-            check_execution_target(states[i], chunk[0], safety)
-            bounds = dict(status="passed")
-        except ValueError as exc:
-            bounds = dict(status="rejected", reason=str(exc))
-        rows.append(dict(sample=i, joint_rad=joint, gripper_m=grip, recorded_target_check=bounds))
+        error = compare_reference_chunk(chunk, expected[i], i)
+        rows.append(
+            dict(
+                sample=i,
+                **error,
+                recorded_target_check=recorded_target_check(states[i], chunk[0], safety),
+            )
+        )
     for i in range(warmup):
         predictor.predict(images[i % len(states)], states[i % len(states)])
     return images, states, rows

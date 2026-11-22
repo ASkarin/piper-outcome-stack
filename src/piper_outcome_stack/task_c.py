@@ -11,8 +11,9 @@ POSITION = "start-03"
 SUCCESS_GOALS = {"train": 50, "development": 6}
 INSTRUCTION = "在桌面推动 T 块，使位置和朝向与目标 G 对齐，再退出观察区。"
 
-# The October 27/29 closeout recipe; C checkpoints and scene values are separate.
+# Stage C uses the closeout RTC settings and the validated full-precision inference path.
 EXECUTION_RECIPE = {
+    "inference_precision": "fp32",
     "control_hz": 50,
     "request_stride": 25,
     "denoising_steps": 10,

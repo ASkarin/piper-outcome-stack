@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace as NS
 
 import pytest
+import torch
 
 from piper_outcome_stack import task_c_execution as execution
 from test_task_c import c_config as c_config  # noqa: F401
@@ -41,6 +42,7 @@ def test_check_never_constructs_devices_or_runs(c_config, tmp_path, monkeypatch)
     result = execution.execute(path, "check", tmp_path / "check.json")
     assert result["status"] == "software_check_completed" and not result["hardware_io"]
     assert resets and result["recipe"]["joint_lowpass"] is False
+    assert result["recipe"]["inference_precision"] == "fp32"
     assert "task_outcome" not in result
 
 
@@ -95,6 +97,9 @@ def test_current_pose_entry_and_cleanup_keep_existing_motion_contract(
 
     def run(*args, **kwargs):
         events.append("run")
+        assert torch.get_float32_matmul_precision() == "highest"
+        assert not torch.backends.cuda.matmul.allow_tf32 and not torch.backends.cudnn.allow_tf32
+        assert torch.backends.cudnn.deterministic and not torch.backends.cudnn.benchmark
         assert kwargs["max_run_s"] == 2 and kwargs["max_actions"] == 100
         assert kwargs["record_action_chunks"] and kwargs["gripper_reference_settings"] is not None
         if failure == "motion":
@@ -164,23 +169,47 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
     checkpoint.mkdir()
     vlm.mkdir()
     selected = select_task(c_config)
-    np.savez(
-        reference,
+    from piper_outcome_stack import task_c_reference
+
+    first = np.zeros((50, 7), dtype=np.float32)
+    committed = np.arange(350, dtype=np.float32).reshape(50, 7)
+    second = np.full((50, 7), 0.01, dtype=np.float32)
+    projected = second.copy()
+    projected[:, 6] = 0
+    fixture = dict(
         tasks=np.array([selected["task"]]),
-        images=np.zeros((1, 2, 3, 3), np.uint8),
+        inference_precision=np.array("fp32"),
+        images=np.zeros((1, 480, 640, 3), np.uint8),
         states=np.zeros((1, 7)),
-        expected_absolute_chunks=np.zeros((1, 50, 7)),
+        seeds=np.array([7]),
+        rtc_seeds=np.array([9]),
+        expected_absolute_chunks=first[None],
+        expected_rtc_chunks=second[None],
+        expected_rtc_execution_chunks=projected[None],
     )
+    np.savez(reference, **fixture)
     c_config["policy"] = {
         "checkpoint": str(checkpoint),
         "vlm_assets": str(vlm),
         "reference_inputs": {"push_to_G": str(reference)},
     }
-    calls = []
+    calls, seeds = [], []
+    model = torch.nn.Linear(1, 1).double()
+    model.config = NS(use_amp=True)
+    model.reset = lambda: None
+
+    def predict(image, state, **kw):
+        assert next(model.parameters()).dtype == torch.float32 and not model.config.use_amp
+        assert kw["gripper_lower_bound"] == "zero"
+        seeds.append(torch.initial_seed())
+        if "previous_model_actions" not in kw:
+            return NS(actions=first, committed_model_actions=committed)
+        np.testing.assert_array_equal(kw["previous_model_actions"], committed[25:])
+        assert kw["inference_delay"] == 20 and kw["overlap_steps"] == 25
+        return NS(actions=second, execution_actions=projected)
+
     predictor = NS(
-        model=NS(reset=lambda: None),
-        predict=lambda *a: np.zeros((50, 7)),
-        configure_rtc=lambda *a, **kw: calls.append(kw),
+        model=model, predict_chunk=predict, configure_rtc=lambda *a, **kw: calls.append(kw)
     )
 
     def load(path, *, task, vlm_assets):
@@ -188,10 +217,52 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
         return predictor
 
     monkeypatch.setattr(SmolVLAChunkPredictor, "from_checkpoint", load)
-    *_, executor, report = execution.prepare_policy(c_config, selected, tmp_path)
+    monkeypatch.setattr(task_c_reference, "recorded_target_check", lambda *a: {"status": "passed"})
+    with task_c_reference.fp32_runtime(), torch.random.fork_rng(devices=[]):
+        *_, executor, report = execution.prepare_policy(c_config, selected, tmp_path)
+        assert torch.initial_seed() == 42
     assert executor.joint_lowpass is False and executor.n_action_steps == 25
     assert calls[-1] == {"num_steps": 10, "guidance": "native_joint6"}
-    assert len(report["reference_errors"]) == 1
+    assert seeds == [7, 9]
+    row = report["reference_errors"][0]
+    assert row["rtc_prefix_steps"] == 25 and row["rtc_commands_checked"] == 50
+    assert row["rtc_error"]["joint_rad"] == 0 and row["rtc_execution_error"]["gripper_m"] == 0
+    assert row["rtc_command_rejections"] == []
+
+    # Failure in the second (prefixed) prediction must stop before the operator's motion entry.
+    np.savez(reference, **(fixture | {"expected_rtc_chunks": second[None] + 0.01}))
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(c_config))
+    monkeypatch.setattr(
+        execution, "run_segment", lambda *a: pytest.fail("preflight allowed motion")
+    )
+    with pytest.raises(ValueError, match="reference mismatch: sample=0 RTC"):
+        execution.execute(path, "run", tmp_path / "failed.json")
+    assert not json.loads((tmp_path / "failed.json").read_text())["hardware_io"]
+
     np.savez(reference, tasks=np.array(["wrong task"]))
     with pytest.raises(ValueError, match="reference instructions differ"):
         execution.prepare_policy(c_config, selected, tmp_path)
+    np.savez(reference, tasks=fixture["tasks"])
+    with pytest.raises(ValueError, match="FP32 RTC reference"):
+        execution.prepare_policy(c_config, selected, tmp_path)
+
+
+def test_c_fp32_backend_settings_restore_after_failure():
+    from piper_outcome_stack.task_c_reference import fp32_runtime
+
+    def settings():
+        return (
+            torch.get_float32_matmul_precision(),
+            torch.get_num_threads(),
+            torch.backends.cudnn.allow_tf32,
+            torch.backends.cudnn.benchmark,
+            torch.backends.cudnn.deterministic,
+        )
+
+    before = settings()
+    with pytest.raises(RuntimeError, match="interrupted"), fp32_runtime():
+        assert settings() == ("highest", 4, False, False, True)
+        assert not torch.backends.cuda.matmul.allow_tf32
+        raise RuntimeError("interrupted")
+    assert settings() == before

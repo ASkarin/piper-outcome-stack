@@ -13,7 +13,6 @@ from .task_c import EXECUTION_RECIPE, select_task, text_field
 def prepare_policy(config, selected, directory):
     """Load configuration/model and check recorded inputs; no device construction."""
     import draccus
-    import numpy as np
     import torch
     from lerobot.robots.config import RobotConfig
     from lerobot.teleoperators.config import TeleoperatorConfig
@@ -22,7 +21,7 @@ def prepare_policy(config, selected, directory):
     from lerobot_robot_outcome_piper.safety import load_motion_safety
     from piper_policy.smolvla import SmolVLAChunkPredictor
     from piper_policy.smolvla_execution import AsyncSmolVLAExecutor
-    from .policy_execution import verify_reference_inputs
+    from .task_c_reference import read_reference, verify_rtc_reference
 
     if not isinstance(config.get("robot"), dict) or not isinstance(config.get("teleop"), dict):
         raise ValueError("C requires actual robot and teleop configurations")
@@ -49,20 +48,29 @@ def prepare_policy(config, selected, directory):
     checkpoint = asset(policy.get("checkpoint"), "policy.checkpoint")
     vlm = asset(policy.get("vlm_assets"), "policy.vlm_assets")
     reference = asset((policy.get("reference_inputs") or {}).get(key), f"reference_inputs.{key}")
-    with np.load(reference) as data:
-        if set(data["tasks"].tolist()) != {selected["task"]}:
-            raise ValueError("C reference instructions differ from the selected skill")
+    recorded = read_reference(reference, selected["task"])
+    print("正在加载 Push-T FP32 模型并核对录制参考。", flush=True)
     predictor = SmolVLAChunkPredictor.from_checkpoint(
         checkpoint, task=selected["task"], vlm_assets=vlm
     )
-    _, _, checks = verify_reference_inputs(predictor, reference, safety, warmup=5)
-    torch.manual_seed(42)
+    predictor.model.float()
+    predictor.model.config.use_amp = False
     executor = AsyncSmolVLAExecutor(predictor, request_stride=25, joint_lowpass=False)
+    checks = verify_rtc_reference(executor, recorded, safety)
+    torch.manual_seed(42)
     evidence = dict(
         checkpoint=str(checkpoint),
         reference_inputs=str(reference),
         reference_errors=checks,
-        reference_scope="recorded raw model targets; live candidates use the frozen RTC recipe",
+        reference_scope="FP32 first chunks, locally rebuilt RTC prefixes and projected targets on recorded inputs",
+        inference_settings=dict(
+            use_amp=predictor.model.config.use_amp,
+            matmul_precision=torch.get_float32_matmul_precision(),
+            cuda_matmul_tf32=torch.backends.cuda.matmul.allow_tf32,
+            cudnn_tf32=torch.backends.cudnn.allow_tf32,
+            cudnn_benchmark=torch.backends.cudnn.benchmark,
+            cudnn_deterministic=torch.backends.cudnn.deterministic,
+        ),
         safety=asdict(safety),
         gripper_reference=asdict(gripper),
     )
@@ -166,9 +174,12 @@ def execute(config_path, mode, output):
         outcome_scope="single skill; program/hold status is not a physical task outcome",
         source=str(Path(__file__).resolve()),
     )
-    with output.open("x") as stream:
+    from .task_c_reference import fp32_runtime
+
+    with output.open("x") as stream, ExitStack() as runtime:
         predictor = None
         try:
+            runtime.enter_context(fp32_runtime())
             config = json.loads(config_path.read_text())
             selected = select_task(config)
             report.update(

@@ -177,6 +177,18 @@ def test_reference_inputs_reject_mismatch_and_empty(tmp_path, monkeypatch):
         verify_reference_inputs(p, empty, None)
 
 
+def test_reference_chunk_rejects_nonfinite_and_broadcastable_targets():
+    from piper_outcome_stack.policy_execution import compare_reference_chunk
+
+    chunk = np.zeros((50, 7), dtype=np.float32)
+    with pytest.raises(ValueError, match="shape differs"):
+        compare_reference_chunk(chunk, chunk[:1], 0)
+    expected = chunk.copy()
+    expected[-1, -1] = np.nan
+    with pytest.raises(ValueError, match="reference mismatch"):
+        compare_reference_chunk(chunk, expected, 0)
+
+
 def test_smolvla_zero_projection_is_logged_before_existing_target_checks(monkeypatch):
     from piper_policy.smolvla_execution import AsyncSmolVLAExecutor
 
