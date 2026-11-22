@@ -65,3 +65,21 @@ def test_paired_sampler_order_and_compressed_index_range():
     for epoch in range(2):
         a, b = list(first), list(second)
         assert a == b and len(a) == len(view) and min(a) >= 0 and max(a) < len(view)
+
+
+def test_single_pusht_cell_balances_sources_over_only_complete_windows():
+    base = ExampleData()
+    for item in base.lineage:
+        item.update(task="Push-T", layout="start-03")
+    view = CompleteWindows(base, 9, expected_cells=1)
+    assert view.summary["cells"] == [
+        {"task": "Push-T", "layout": "start-03", "demos": 9, "probability": 1.0}
+    ]
+    repeated = [
+        i for i, source in enumerate(view.lineage) if source["source_session"] == "session0"
+    ]
+    starts = view.meta.episodes["dataset_from_index"]
+    ends = view.meta.episodes["dataset_to_index"]
+    assert (
+        abs(sum(float(view.weights[starts[i] : ends[i]].sum()) for i in repeated) - 1 / 9) < 1e-12
+    )

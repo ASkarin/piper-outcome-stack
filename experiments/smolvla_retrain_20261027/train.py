@@ -36,7 +36,7 @@ def require(condition, message):
 
 
 class CompleteWindows(Dataset):
-    def __init__(self, base, expected_demos):
+    def __init__(self, base, expected_demos, expected_cells=8):
         self.base = base
         self.indices, starts, ends, self.lineage = [], [], [], []
         groups, cells = defaultdict(list), defaultdict(set)
@@ -53,7 +53,7 @@ class CompleteWindows(Dataset):
             groups[demo].extend(range(begin, len(self.indices)))
             cells[cell].add(demo)
         require(
-            len(groups) == expected_demos and len(cells) == 8,
+            len(groups) == expected_demos and len(cells) == expected_cells,
             f"complete-window demo/cell coverage differs: {len(groups)}/{len(cells)}",
         )
         self.weights = torch.zeros(len(self.indices), dtype=torch.float64)
@@ -84,7 +84,7 @@ class CompleteWindows(Dataset):
             retained_segments=base.num_episodes,
             eligible_segments=self.num_episodes,
             cells=[
-                dict(task=t, layout=layout, demos=len(v), probability=1 / 8)
+                dict(task=t, layout=layout, demos=len(v), probability=1 / len(cells))
                 for (t, layout), v in sorted(cells.items())
             ],
         )
@@ -262,9 +262,12 @@ def run(spec):
     root.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(4)
     raw_training, development = make_views(spec)
-    training = CompleteWindows(raw_training, 239)
+    # The archived B run uses 239/39 demonstrations in eight task-layout cells.
+    counts = spec.get("demonstrations", {"train": 239, "development": 39, "task_layout_cells": 8})
+    training = CompleteWindows(raw_training, counts["train"], counts["task_layout_cells"])
     require(
-        len({(x["source_session"], x["source_episode"]) for x in development.lineage}) == 39,
+        len({(x["source_session"], x["source_episode"]) for x in development.lineage})
+        == counts["development"],
         "development original-demo count differs",
     )
     subset = Subset(development, development.evaluation_indices(4))
@@ -302,7 +305,7 @@ def run(spec):
             train=training.summary,
             train_state_statistics=raw_training.meta.stats["observation.state"],
             train_action_statistics=raw_training.meta.stats["action"],
-            development_demos=39,
+            development_demos=counts["development"],
             development_segments=development.num_episodes,
             data_manifest_sha256=spec["data_manifest_sha256"],
         ),

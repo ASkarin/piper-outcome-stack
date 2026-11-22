@@ -8,7 +8,12 @@ import threading
 import pytest
 
 from test_plugin import make_robot, FakeReceiver, valid_action, xbox_config, FakeJoystick
-from lerobot_robot_outcome_piper.teleop_control import HoldSettings, JointHold, TeleopControl, TeleopState
+from lerobot_robot_outcome_piper.teleop_control import (
+    HoldSettings,
+    JointHold,
+    TeleopControl,
+    TeleopState,
+)
 from lerobot_robot_outcome_piper.processor import OutcomePiperAction
 from lerobot_robot_outcome_piper.robot import PiperState
 from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox
