@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 import numpy as np
 from .positive_act import PositiveACTPolicy
+from .statistics import apply_joint_state_std_floor
 from .policy_execution import validate_action_processors
 
 
@@ -24,7 +25,14 @@ def register_act_factory():
         factory.get_policy_class = original
 
 
-def act_processors(config, *, checkpoint=None, dataset_stats=None, relative_stats=None):
+def act_processors(
+    config,
+    *,
+    checkpoint=None,
+    dataset_stats=None,
+    relative_stats=None,
+    joint_state_std_floor_rad=None,
+):
     """Preserve saved relative normalizers on resume; construct them once for fresh ACT."""
     from lerobot.policies.factory import make_pre_post_processors
     from lerobot.processor.relative_action_processor import (
@@ -45,6 +53,7 @@ def act_processors(config, *, checkpoint=None, dataset_stats=None, relative_stat
         if dataset_stats is None or relative_stats is None:
             raise ValueError("fresh ACT requires explicit train-only statistics")
         stats = deepcopy(dataset_stats)
+        apply_joint_state_std_floor(stats, joint_state_std_floor_rad)
         stats["action"] = {key: np.asarray(value) for key, value in relative_stats.items()}
         pre, post = make_pre_post_processors(config, dataset_stats=stats)
         relative = RelativeActionsProcessorStep(
