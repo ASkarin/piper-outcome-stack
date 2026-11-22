@@ -335,7 +335,12 @@ def run(spec):
         return model
 
     def processors(policy_cfg, **kwargs):
-        return make_processors(policy_cfg, raw_training, "absolute")
+        return make_processors(
+            policy_cfg,
+            raw_training,
+            "absolute",
+            joint_state_std_floor_rad=spec.get("joint_state_std_floor_rad"),
+        )
 
     def update(*args, **kwargs):
         if time.monotonic() - started > spec["budget"]["max_wallclock_seconds"]:
@@ -420,7 +425,7 @@ def run(spec):
         require(result["updates"] == cfg.steps, "fixed update budget not completed")
         checkpoint = output / "checkpoints" / f"{cfg.steps:06d}" / "pretrained_model"
         if spec["witness"]:
-            pre, post = make_processors(cfg.policy, raw_training, "absolute")
+            pre, post = processors(cfg.policy)
             result["witness"] = padding_and_reload_witness(
                 spec, checkpoint, training, root, created_models[0], pre, post
             )

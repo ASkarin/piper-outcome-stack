@@ -70,3 +70,33 @@ def test_training_stats_are_encoded_without_changing_raw_labels(monkeypatch):
     assert captures[0]["action"]["mean"][6] == pytest.approx((0 + 0.1 + 0.3) / 3)
     np.testing.assert_array_equal(training.actions[:, 6], raw[:, 6])
     assert not pre.steps[0].decode and post.steps[0].decode
+
+
+def test_joint_state_floor_preserves_other_statistics_and_raw_training_data(monkeypatch):
+    import lerobot.policies.smolvla.processor_smolvla as upstream
+
+    monkeypatch.setattr(
+        upstream,
+        "make_smolvla_pre_post_processors",
+        lambda cfg, dataset_stats: (dataset_stats, None),
+    )
+    std = np.array([0.3, 0.2, 0.1, 0.0003, 0.0015, 0.00009, 0.00001], dtype=np.float32)
+    mean = np.arange(7, dtype=np.float32)
+    stats = {
+        key: {"std": std.copy(), "mean": mean.copy()} for key in ("observation.state", "action")
+    }
+    training = NS(meta=NS(stats=stats))
+    floor = float(np.deg2rad(0.1))
+    effective, _ = make_processors(None, training, "absolute", joint_state_std_floor_rad=floor)
+    expected_std = std.copy()
+    expected_std[3:6] = floor
+    np.testing.assert_array_equal(effective["observation.state"]["std"], expected_std)
+    np.testing.assert_array_equal(effective["observation.state"]["mean"], mean)
+    np.testing.assert_array_equal(effective["action"]["std"], std)
+    np.testing.assert_array_equal(effective["action"]["mean"], mean)
+    np.testing.assert_array_equal(stats["observation.state"]["std"], std)
+    unchanged, _ = make_processors(None, training, "absolute")
+    np.testing.assert_array_equal(unchanged["observation.state"]["std"], std)
+    for invalid in (0.0, -1.0, float("nan"), float("inf"), True):
+        with pytest.raises(ValueError, match="positive finite radians"):
+            make_processors(None, training, "absolute", joint_state_std_floor_rad=invalid)

@@ -1,4 +1,4 @@
-"""Explicit train-time sqrt(m) gripper representation, serialized with processors."""
+"""PiPER SmolVLA normalization and gripper encoding, serialized with the checkpoint."""
 
 from dataclasses import dataclass
 from copy import deepcopy
@@ -44,10 +44,18 @@ class SqrtGripperStep(ProcessorStep):
         return {"decode": self.decode}
 
 
-def make_processors(config, training, encoding):
+def make_processors(config, training, encoding, *, joint_state_std_floor_rad=None):
     from lerobot.policies.smolvla.processor_smolvla import make_smolvla_pre_post_processors
 
     stats = deepcopy(training.meta.stats)
+    if joint_state_std_floor_rad is not None:
+        if type(joint_state_std_floor_rad) not in (int, float) or not (
+            0 < joint_state_std_floor_rad < np.inf
+        ):
+            raise ValueError("joint state standard deviation floor must be positive finite radians")
+        # The first six state components are angles; the final gripper opening is in metres.
+        state_std = stats["observation.state"]["std"]
+        state_std[:6] = np.maximum(state_std[:6], joint_state_std_floor_rad)
     if encoding == "sqrt_gripper":
         encoded = training.actions.copy()
         if not np.isfinite(encoded).all() or np.any(encoded[:, 6] < 0):

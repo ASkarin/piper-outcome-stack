@@ -124,7 +124,12 @@ def smoke(spec, output):
         cfg = configured_policy(spec)
         model = SmolVLAPolicy.from_pretrained(spec["source_checkpoint"], config=cfg, strict=True)
         model = model.to("cuda")
-        pre, post = make_processors(cfg, train, spec.get("action_encoding", "absolute"))
+        pre, post = make_processors(
+            cfg,
+            train,
+            spec.get("action_encoding", "absolute"),
+            joint_state_std_floor_rad=spec.get("joint_state_std_floor_rad"),
+        )
         result["parameters"] = parameter_report(model)
         initial = output / "initial/pretrained_model"
         model.save_pretrained(initial)
@@ -260,7 +265,12 @@ def train(spec):
         return original_update(*args, **kwargs)
 
     def processors(policy_cfg, **kwargs):
-        return make_processors(policy_cfg, training, spec.get("action_encoding", "absolute"))
+        return make_processors(
+            policy_cfg,
+            training,
+            spec.get("action_encoding", "absolute"),
+            joint_state_std_floor_rad=spec.get("joint_state_std_floor_rad"),
+        )
 
     def make_policy(*args, **kwargs):
         policy = original_policy(*args, **kwargs)
