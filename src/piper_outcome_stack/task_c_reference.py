@@ -26,41 +26,78 @@ def fp32_runtime():
         torch.set_num_threads(previous_threads)
 
 
-def read_reference(path, task):
+def read_reference(path, task, policy_type="smolvla"):
     with np.load(path, allow_pickle=False) as source:
         tasks = source["tasks"]
         if tasks.ndim != 1 or set(tasks.tolist()) != {task}:
             raise ValueError("C reference instructions differ from the selected skill")
         if "inference_precision" not in source or source["inference_precision"].item() != "fp32":
-            raise ValueError("C requires an FP32 RTC reference from the training machine")
-        reference = {
-            key: source[key]
-            for key in (
-                "images",
-                "states",
-                "seeds",
-                "rtc_seeds",
-                "expected_absolute_chunks",
-                "expected_rtc_chunks",
-                "expected_rtc_execution_chunks",
+            raise ValueError(
+                "C requires an FP32 RTC reference for SmolVLA or FP32 TE reference for ACT"
             )
-        }
+        family = source["policy_type"].item() if "policy_type" in source else "smolvla"
+        if family != policy_type:
+            raise ValueError("C reference policy family differs from the selected checkpoint")
+        keys = ["images", "states", "expected_absolute_chunks"]
+        if policy_type == "act":
+            keys.append("expected_ensemble_targets")
+        else:
+            keys.extend(
+                ["seeds", "rtc_seeds", "expected_rtc_chunks", "expected_rtc_execution_chunks"]
+            )
+        reference = {key: source[key] for key in keys}
     n = len(tasks)
     images, states = reference["images"], reference["states"]
     if images.shape != (n, 480, 640, 3) or images.dtype != np.uint8 or states.shape != (n, 7):
         raise ValueError("C reference needs aligned 640x480 RGB images and seven-axis states")
+    if reference["expected_absolute_chunks"].shape != (n, 50, 7):
+        raise ValueError("C reference must contain one 50x7 chunk per observation")
+    if policy_type == "act":
+        if reference["expected_ensemble_targets"].shape != (n, 2, 7):
+            raise ValueError("ACT reference requires the two absolute ensemble targets")
+        return reference
     for name in ("seeds", "rtc_seeds"):
         seeds = reference[name]
         if seeds.shape != (n,) or not np.issubdtype(seeds.dtype, np.integer):
             raise ValueError(f"C reference needs one integer {name} value per observation")
-    for name in (
-        "expected_absolute_chunks",
-        "expected_rtc_chunks",
-        "expected_rtc_execution_chunks",
-    ):
+    for name in ("expected_rtc_chunks", "expected_rtc_execution_chunks"):
         if reference[name].shape != (n, 50, 7):
             raise ValueError(f"C reference {name} must contain one 50x7 chunk per observation")
     return reference
+
+
+def act_reference_outputs(policy, image, state):
+    """Replay two control ticks on one recorded observation with a fresh ensemble."""
+    policy.reset_execution()
+    targets = []
+    for tick in range(2):
+        chunk, index, inferred = policy.execution_chunk(image, state, tick)
+        if tick == 0:
+            first = chunk.copy()
+        targets.append(policy.select_target(chunk, chunk_index=index, new_chunk=inferred))
+    return first, np.stack(targets)
+
+
+def verify_act_reference(policy, reference, safety):
+    checks = []
+    for i, (image, state) in enumerate(zip(reference["images"], reference["states"], strict=True)):
+        chunk, targets = act_reference_outputs(policy, image, state)
+        error = compare_reference_chunk(chunk, reference["expected_absolute_chunks"][i], i)
+        ensemble_error = compare_reference_chunk(
+            targets, reference["expected_ensemble_targets"][i], f"{i} TE"
+        )
+        bounds = [recorded_target_check(state, target, safety) for target in targets]
+        checks.append(
+            dict(
+                sample=i,
+                **error,
+                recorded_target_check=bounds[0],
+                ensemble_error=ensemble_error,
+                ensemble_target_checks=bounds,
+            )
+        )
+    policy.reset_execution()
+    return checks
 
 
 def verify_rtc_reference(executor, reference, safety):

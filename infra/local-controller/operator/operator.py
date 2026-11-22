@@ -122,6 +122,14 @@ def execute(args, profile):
     if args.command == "c":
         if "record_c_config" not in profile:
             raise ValueError("尚未配置采集入口 record_c_config")
+        config_path = profile["record_c_config"]
+        if args.model != "original":
+            config_path = profile.get("c_policy_configs", {}).get(args.model)
+            if (
+                not config_path
+                or load(Path(config_path)).get("policy", {}).get("variant") != args.model
+            ):
+                raise ValueError(f"C 尚未配置 {args.model} 候选")
         run = new_run(profile, "task-c")
         output = run / "trial.json"
         command = [
@@ -130,7 +138,7 @@ def execute(args, profile):
             "piper_outcome_stack.task_c",
             args.mode,
             "--config",
-            profile["record_c_config"],
+            config_path,
             "--output",
             str(output),
         ]
@@ -311,8 +319,11 @@ def main(argv=None):
     smolvla.add_argument("skill", choices=("green-left", "green-right", "blue-left", "blue-right"))
     smolvla.add_argument("layout", choices=("1", "2"))
     smolvla.add_argument("--verify-only", action="store_true")
-    task_c = sub.add_parser("c", help="Check or run one C skill from the current pose")
+    task_c = sub.add_parser(
+        "c", help="Check a Push-T policy or run from the configured A work pose"
+    )
     task_c.add_argument("mode", choices=("check", "run"))
+    task_c.add_argument("model", nargs="?", choices=("original", "flat", "act"), default="original")
     for name in ("recover", "status", "link", "firmware", "limits", "acceleration"):
         sub.add_parser(name)
     for name in ("convert", "audit", "pauses"):

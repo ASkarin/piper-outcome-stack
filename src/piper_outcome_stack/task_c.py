@@ -25,6 +25,16 @@ EXECUTION_RECIPE = {
 }
 
 
+ACT_EXECUTION_RECIPE = {
+    "inference_precision": "fp32",
+    "control_hz": 50,
+    "n_action_steps": 1,
+    "temporal_ensemble_coeff": 0.01,
+    "chunk_size": 50,
+    "joint_representation": "relative",
+}
+
+
 def text_field(value, name):
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"C configuration requires {name}")

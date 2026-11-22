@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 
-from .task_c import EXECUTION_RECIPE, select_task, text_field
+from .task_c import ACT_EXECUTION_RECIPE, EXECUTION_RECIPE, select_task, text_field
 
 
 def prepare_policy(config, selected, directory):
@@ -21,7 +21,7 @@ def prepare_policy(config, selected, directory):
     from lerobot_robot_outcome_piper.safety import load_motion_safety
     from piper_policy.smolvla import SmolVLAChunkPredictor
     from piper_policy.smolvla_execution import AsyncSmolVLAExecutor
-    from .task_c_reference import read_reference, verify_rtc_reference
+    from .task_c_reference import read_reference, verify_act_reference, verify_rtc_reference
 
     if not isinstance(config.get("robot"), dict) or not isinstance(config.get("teleop"), dict):
         raise ValueError("C requires actual robot and teleop configurations")
@@ -47,18 +47,36 @@ def prepare_policy(config, selected, directory):
             raise FileNotFoundError(f"missing C {name}: {path}")
         return path
 
+    family = policy.get("type", "smolvla")
+    if family not in ("smolvla", "act"):
+        raise ValueError(f"unknown C policy family: {family}")
     checkpoint = asset(policy.get("checkpoint"), "policy.checkpoint")
-    vlm = asset(policy.get("vlm_assets"), "policy.vlm_assets")
     reference = asset((policy.get("reference_inputs") or {}).get(key), f"reference_inputs.{key}")
-    recorded = read_reference(reference, selected["task"])
-    print("正在加载 Push-T FP32 模型并核对录制参考。", flush=True)
-    predictor = SmolVLAChunkPredictor.from_checkpoint(
-        checkpoint, task=selected["task"], vlm_assets=vlm
-    )
+    recorded = read_reference(reference, selected["task"], family)
+    print(f"正在加载 Push-T {family} FP32 模型并核对录制参考。", flush=True)
+    if family == "act":
+        from piper_policy.policy_execution import ACTChunkPredictor
+
+        predictor = ACTChunkPredictor.from_checkpoint(checkpoint)
+    else:
+        vlm = asset(policy.get("vlm_assets"), "policy.vlm_assets")
+        predictor = SmolVLAChunkPredictor.from_checkpoint(
+            checkpoint, task=selected["task"], vlm_assets=vlm
+        )
     predictor.model.float()
     predictor.model.config.use_amp = False
-    executor = AsyncSmolVLAExecutor(predictor, request_stride=25, joint_lowpass=False)
-    checks = verify_rtc_reference(executor, recorded, safety)
+    if family == "act":
+        predictor.configure_action_steps(ACT_EXECUTION_RECIPE["n_action_steps"])
+        predictor.configure_temporal_ensemble(ACT_EXECUTION_RECIPE["temporal_ensemble_coeff"])
+        executor = predictor
+        checks = verify_act_reference(executor, recorded, safety)
+        scope = (
+            "FP32 absolute ACT chunks and consecutive temporal ensemble targets on recorded inputs"
+        )
+    else:
+        executor = AsyncSmolVLAExecutor(predictor, request_stride=25, joint_lowpass=False)
+        checks = verify_rtc_reference(executor, recorded, safety)
+        scope = "FP32 first chunks, locally rebuilt RTC prefixes and projected targets on recorded inputs"
     torch.manual_seed(42)
     evidence = dict(
         checkpoint=str(checkpoint),
@@ -69,7 +87,7 @@ def prepare_policy(config, selected, directory):
         ),
         reference_inputs=str(reference),
         reference_errors=checks,
-        reference_scope="FP32 first chunks, locally rebuilt RTC prefixes and projected targets on recorded inputs",
+        reference_scope=scope,
         inference_settings=dict(
             use_amp=predictor.model.config.use_amp,
             matmul_precision=torch.get_float32_matmul_precision(),
@@ -202,7 +220,15 @@ def execute(config_path, mode, output):
             runtime.enter_context(fp32_runtime())
             config = json.loads(config_path.read_text())
             selected = select_task(config)
+            policy = config.get("policy") or {}
+            family = policy.get("type", "smolvla")
             report.update(
+                policy_type=family,
+                policy_variant=policy.get("variant", "original"),
+                recipe={
+                    **(ACT_EXECUTION_RECIPE if family == "act" else EXECUTION_RECIPE),
+                    "seed": 42,
+                },
                 task=selected["task"],
                 task_context=selected["context"],
                 position=selected["position"],

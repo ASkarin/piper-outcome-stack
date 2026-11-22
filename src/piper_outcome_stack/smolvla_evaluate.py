@@ -92,7 +92,16 @@ def grouped_errors(predictions, targets, valid, provenance):
     return {"per_source": sources, "macro_task_layout": macro}
 
 
-def evaluate(spec, checkpoint, output, policy_type):
+def evaluate(spec, checkpoint, output, policy_type, *, deployment_fp32=False):
+    if deployment_fp32:
+        from .task_c_reference import fp32_runtime
+
+        with fp32_runtime():
+            return _evaluate(spec, checkpoint, output, policy_type, True)
+    return _evaluate(spec, checkpoint, output, policy_type, False)
+
+
+def _evaluate(spec, checkpoint, output, policy_type, deployment_fp32):
     output.mkdir(parents=True, exist_ok=False)
     result = {
         "status": "started",
@@ -116,6 +125,10 @@ def evaluate(spec, checkpoint, output, policy_type):
             from piper_policy.policy_execution import ACTChunkPredictor
 
             predictor = ACTChunkPredictor.from_checkpoint(checkpoint)
+        if deployment_fp32:
+            predictor.model.float()
+            predictor.model.config.use_amp = False
+            result["inference_precision"] = "fp32"
         first = development[indices[0]]
         rgb = first[IMAGE_FEATURE].permute(1, 2, 0).numpy()
         state = first["observation.state"].numpy()
@@ -205,8 +218,15 @@ def main():
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--policy-type", choices=["smolvla", "act"], default="smolvla")
+    parser.add_argument("--deployment-fp32", action="store_true")
     args = parser.parse_args()
-    evaluate(json.loads(args.spec.read_text()), args.checkpoint, args.output, args.policy_type)
+    evaluate(
+        json.loads(args.spec.read_text()),
+        args.checkpoint,
+        args.output,
+        args.policy_type,
+        deployment_fp32=args.deployment_fp32,
+    )
 
 
 if __name__ == "__main__":

@@ -248,3 +248,23 @@ def test_c_check_uses_active_config_without_privileges(tmp_path, monkeypatch):
         p["record_c_config"],
     ]
     assert "sudo" not in calls[0]
+
+
+def test_c_model_selector_binds_only_the_requested_candidate(tmp_path, monkeypatch):
+    p = profile(tmp_path)
+    p["record_c_config"] = str(tmp_path / "default.json")
+    candidate = tmp_path / "act.json"
+    candidate.write_text(json.dumps({"policy": {"variant": "act"}}))
+    p["c_policy_configs"] = {"act": str(candidate)}
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps(p))
+    calls = []
+    monkeypatch.setattr(op.subprocess, "call", lambda cmd: calls.append(cmd) or 0)
+    assert op.main(["--profile", str(path), "c", "check", "act"]) == 0
+    assert calls[0][calls[0].index("--config") + 1] == str(candidate)
+    assert "sudo" not in calls[0]
+    import pytest
+
+    with pytest.raises(SystemExit):
+        op.main(["--profile", str(path), "c", "check", "flat"])
+    assert len(calls) == 1

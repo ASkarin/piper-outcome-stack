@@ -294,3 +294,38 @@ def test_c_fp32_backend_settings_restore_after_failure():
         assert not torch.backends.cuda.matmul.allow_tf32
         raise RuntimeError("interrupted")
     assert settings() == before
+
+
+def test_act_reference_checks_absolute_ensemble_and_rejects_family_mix(tmp_path, monkeypatch):
+    import numpy as np
+    from piper_policy.policy_execution import ACTChunkPredictor
+    from piper_outcome_stack import task_c_reference as ref
+
+    task = "push"
+    path = tmp_path / "act.npz"
+    chunk = np.arange(50, dtype=np.float32)[:, None] * np.ones((1, 7), np.float32) / 100
+    expected = np.stack((chunk[0], (chunk[1] + np.exp(-0.01) * chunk[0]) / (1 + np.exp(-0.01))))
+    np.savez(
+        path,
+        policy_type=np.array("act"),
+        inference_precision=np.array("fp32"),
+        tasks=np.array([task]),
+        images=np.zeros((1, 480, 640, 3), np.uint8),
+        states=np.zeros((1, 7), np.float32),
+        expected_absolute_chunks=chunk[None],
+        expected_ensemble_targets=expected[None],
+    )
+    with pytest.raises(ValueError, match="family"):
+        ref.read_reference(path, task, "smolvla")
+    reference = ref.read_reference(path, task, "act")
+    model = NS(config=NS(chunk_size=50), reset=lambda: None)
+    policy = ACTChunkPredictor(model, None, None)
+    policy.configure_action_steps(1)
+    policy.configure_temporal_ensemble(0.01)
+    monkeypatch.setattr(policy, "predict", lambda image, state: chunk.copy())
+    monkeypatch.setattr(ref, "recorded_target_check", lambda *args: {"status": "passed"})
+    row = ref.verify_act_reference(policy, reference, None)[0]
+    assert row["ensemble_error"]["joint_rad"] < 1e-6 and policy.ensemble_updates == 0
+    reference["expected_ensemble_targets"][0, 1, 0] += 0.1
+    with pytest.raises(ValueError, match="reference mismatch: sample=0 TE"):
+        ref.verify_act_reference(policy, reference, None)
