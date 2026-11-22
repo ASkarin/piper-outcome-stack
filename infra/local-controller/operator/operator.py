@@ -198,7 +198,7 @@ def execute(args, profile):
 
             cfg = configure_recording(cfg, args.split or "train")
             print(
-                f"Push-T {cfg['recording_split']}｜默认精细档 50%｜"
+                f"Push-T {cfg['recording_split']}｜初始常规档 100%｜"
                 f"本会话目标 {cfg['dataset']['num_episodes']} 条含有效精细档操作的成功示范。"
             )
         if mode in ("b", "c"):

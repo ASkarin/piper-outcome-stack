@@ -9,7 +9,7 @@ No service, CAN setup, new backend or sudo permission is installed.
 |---|---|
 | `piper act SKILL 1` | Run the configured fixed ACT bundle; `--verify-only` checks assets without device I/O. |
 | `piper record` | New Xbox raw capture; existing LB/X/RB/A/Y/B controls. |
-| `piper record c` | 第三种起点的 Push‑T 默认精细档，训练连续采 50 条有效成功示范。补采开发集用 `piper record c --split development`，目标为 6 条。 |
+| `piper record c` | 第三种起点的 Push‑T 初始为常规档，训练连续采 50 条有效成功示范。补采开发集用 `piper record c --split development`，目标为 6 条。 |
 | `piper record b --split train` | B training capture: choose layout, then choose a task for each episode. |
 | `piper record b --split development` | B development capture in a separate session: choose layout, then task. |
 | `piper status` | Fixed passive status query. |
@@ -77,7 +77,7 @@ with the current 50Hz defaults this is 1.25mm/tick (62.5mm/s per coordinate),
 0.25degree/tick and 3mm lead per coordinate. The deadzone is applied to the raw
 joystick axes before this gain, so selecting fine does not change its threshold.
 Gripper generation and A/Y preset
-trajectories retain their existing parameters. A/B sessions start in normal and C sessions start in fine. Across standalone Xbox teleoperation and A/B/C recording, X selects the translation strategy and Menu (≡) switches normal/fine.
+trajectories retain their existing parameters. All manual Xbox sessions start in normal, including A/B/C. Across standalone Xbox teleoperation and A/B/C recording, X selects the translation strategy and Menu (≡) switches normal/fine.
 The selected gain persists across episodes and is saved in action telemetry.
 
 During recording, data eligibility follows the existing LB permission without

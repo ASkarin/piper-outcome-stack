@@ -1572,8 +1572,8 @@ def test_cli_registers_plugins_and_forwards_arguments(monkeypatch):
     assert events == ["plugins", ("--robot.type=outcome_piper",)]
 
 
-@pytest.mark.parametrize("target,initial", [(None, "normal"), ("fine", "fine")])
-def test_record_injects_canonical_processor_into_official_recorder(monkeypatch, target, initial):
+@pytest.mark.parametrize("target", [None, "fine"])
+def test_record_injects_canonical_processor_into_official_recorder(monkeypatch, target):
     robot_config = SimpleNamespace(
         execution_mode="motion",
         cameras={"d435": SimpleNamespace(fps=20)},
@@ -1594,8 +1594,8 @@ def test_record_injects_canonical_processor_into_official_recorder(monkeypatch, 
         workflows, "_validate_workflow_configs", lambda *_: (robot_config, teleop_config)
     )
 
-    def make_processor(robot, teleop, *, initial_precision):
-        assert (robot, teleop, initial_precision) == (robot_config, teleop_config, initial)
+    def make_processor(robot, teleop, *, initial_precision="normal"):
+        assert (robot, teleop, initial_precision) == (robot_config, teleop_config, "normal")
         return sentinel
 
     monkeypatch.setattr(workflows, "_processor", make_processor)
@@ -1704,7 +1704,7 @@ def test_record_does_not_connect_robot_if_teleop_connect_fails(tmp_path: Path, m
     monkeypatch.setattr(
         workflows,
         "_processor",
-        lambda *_, initial_precision: SimpleNamespace(
+        lambda *_, initial_precision="normal": SimpleNamespace(
             steps=[SimpleNamespace(control=TeleopControl(initial_precision=initial_precision))]
         ),
     )

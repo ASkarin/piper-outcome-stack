@@ -321,8 +321,8 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
         if split not in ("train", "development"):
             raise ValueError("C recording requires an explicit data split")
     if target_precision is not None:
-        if teleop_action_processor.steps[0].control.precision != target_precision:
-            raise ValueError("recording_target_precision differs from the initial Xbox gain")
+        if target_precision not in ("normal", "fine"):
+            raise ValueError("recording_target_precision must be normal or fine")
         if type(cfg.dataset.num_episodes) is not int or cfg.dataset.num_episodes <= 0:
             raise ValueError("successful demonstration target must be a positive integer")
     if task_goal is not None and (type(task_goal) is not int or task_goal <= 0):
@@ -401,7 +401,11 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
         robot.configure_teleoperation(
             teleop_action_processor.steps[0].control, cfg.teleop.hold_settings()
         )
-        audit.emit("teleoperation_config", config=repr(cfg.teleop))
+        audit.emit(
+            "teleoperation_config",
+            config=repr(cfg.teleop),
+            initial_precision=teleop_action_processor.steps[0].control.precision,
+        )
         capture_gc.prepare()  # No hardware connection or motor control yet.
         capture_gc.start()
         teleop.connect()
