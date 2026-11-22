@@ -16,7 +16,7 @@ def prepare_stub(monkeypatch):
         "prepare_policy",
         lambda *a: (
             NS(),
-            NS(hold_settings=lambda: NS()),
+            NS(hold_settings=lambda: NS(), work_joint_rad=(0.0,) * 6, work_gripper_m=0.0011),
             NS(),
             NS(),
             predictor,
@@ -46,10 +46,11 @@ def test_check_never_constructs_devices_or_runs(c_config, tmp_path, monkeypatch)
     assert "task_outcome" not in result
 
 
-@pytest.mark.parametrize("failure", [None, "motion", "robot_cleanup", "teleop_cleanup"])
-def test_current_pose_entry_and_cleanup_keep_existing_motion_contract(
-    c_config, tmp_path, monkeypatch, failure
-):
+@pytest.mark.parametrize(
+    "failure",
+    [None, "cancel_A", "unconfirmed_A", "pose", "motion", "robot_cleanup", "teleop_cleanup"],
+)
+def test_work_pose_precedes_policy_and_releases_resources(c_config, tmp_path, monkeypatch, failure):
     from contextlib import nullcontext
     import lerobot_robot_outcome_piper as plugin
     from lerobot_robot_outcome_piper.robot import PiperState
@@ -95,7 +96,19 @@ def test_current_pose_entry_and_cleanup_keep_existing_motion_contract(
             if failure == "teleop_cleanup":
                 raise RuntimeError("teleop cleanup failure")
 
+    def prepare(robot, teleop, control, config, rows):
+        assert events[-1] == "enable"
+        assert robot.camera_input_poll is not None and robot.emergency_stop_poll is not None
+        events.append("prepare_A")
+        if failure == "pose":
+            raise RuntimeError("A preparation failure")
+        return dict(
+            status="cancelled_held" if failure == "cancel_A" else "arrived_held",
+            hold_confirmed=failure != "unconfirmed_A",
+        )
+
     def run(*args, **kwargs):
+        assert events[-1] == "prepare_A"
         events.append("run")
         assert torch.get_float32_matmul_precision() == "highest"
         assert not torch.backends.cuda.matmul.allow_tf32 and not torch.backends.cudnn.allow_tf32
@@ -113,22 +126,24 @@ def test_current_pose_entry_and_cleanup_keep_existing_motion_contract(
         "lerobot_robot_outcome_piper.input_safety.motion_input_safety_scope", nullcontext
     )
     monkeypatch.setattr("piper_outcome_stack.policy_motion.run_policy_trial", run)
-    monkeypatch.setattr(
-        "piper_outcome_stack.policy_startup.prepare_work_pose",
-        lambda *a, **kw: pytest.fail("C must not go to A"),
-    )
+    monkeypatch.setattr("piper_outcome_stack.policy_startup.prepare_work_pose", prepare)
     path, output = tmp_path / "c.json", tmp_path / "trial.json"
     path.write_text(json.dumps(c_config))
-    if failure:
-        with pytest.raises(RuntimeError, match="failure"):
+    if failure not in (None, "cancel_A"):
+        with pytest.raises(RuntimeError, match="failure|without a confirmed hold"):
             execution.execute(path, "run", output)
     else:
         execution.execute(path, "run", output)
     report = json.loads(output.read_text())
-    assert report["status"] == ("failed" if failure else "segment_ended_held")
+    if failure == "cancel_A":
+        assert report["status"] == "startup_cancelled_held" and report["policy_actions_sent"] == 0
+        assert report["hold_confirmed"] and report["startup_A"]["hold_confirmed"]
+    else:
+        assert report["status"] == ("failed" if failure else "segment_ended_held")
+    assert ("run" in events) == (failure not in ("cancel_A", "unconfirmed_A", "pose"))
     assert report["last_action_telemetry"] == Robot.last_action_telemetry
     assert events[-2:] == ["robot_cleanup", "teleop_cleanup"]
-    assert ("fault" in events) == (failure == "motion")
+    assert ("fault" in events) == (failure in ("pose", "unconfirmed_A", "motion"))
     assert resets and report["rgb_recording"]["status"] == "completed"
     assert "task_outcome" not in report
 
@@ -161,7 +176,13 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
 
     robot = config(tmp_path, mode="motion")
     robot.capture_timing = CaptureTiming(0.2, 0.1, 0.05, 0.2)
-    teleop = xbox_config(control_hz=50, gripper_reference=asdict(SETTINGS))
+    teleop = xbox_config(
+        control_hz=50,
+        gripper_reference=asdict(SETTINGS),
+        work_pose_button=4,
+        work_joint_rad=(0.0,) * 6,
+        work_gripper_m=0.0011,
+    )
     monkeypatch.setattr(
         draccus, "decode", lambda kind, raw: robot if kind is RobotConfig else teleop
     )
@@ -240,11 +261,18 @@ def test_prepare_uses_reference_task_and_exact_closeout_recipe(c_config, tmp_pat
         execution.execute(path, "run", tmp_path / "failed.json")
     assert not json.loads((tmp_path / "failed.json").read_text())["hardware_io"]
 
+    assert report["startup_work_pose"] == dict(
+        name="A", target_joints_rad=[0.0] * 6, target_gripper_m=0.0011
+    )
     np.savez(reference, tasks=np.array(["wrong task"]))
     with pytest.raises(ValueError, match="reference instructions differ"):
         execution.prepare_policy(c_config, selected, tmp_path)
     np.savez(reference, tasks=fixture["tasks"])
     with pytest.raises(ValueError, match="FP32 RTC reference"):
+        execution.prepare_policy(c_config, selected, tmp_path)
+
+    teleop.work_joint_rad = None
+    with pytest.raises(ValueError, match="configured A work pose"):
         execution.prepare_policy(c_config, selected, tmp_path)
 
 

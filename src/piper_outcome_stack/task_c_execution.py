@@ -33,6 +33,8 @@ def prepare_policy(config, selected, directory):
         raise ValueError("C uses the existing measured Xbox configuration at50Hz")
     if robot_cfg.capture_timing is None or teleop_cfg.gripper_reference is None:
         raise ValueError("C requires capture timing and measured continuous gripper settings")
+    if teleop_cfg.work_joint_rad is None or teleop_cfg.work_gripper_m is None:
+        raise ValueError("C startup requires the configured A work pose and gripper opening")
     safety = load_motion_safety(robot_cfg.safety_path)
     gripper = GripperReferenceSettings(**teleop_cfg.gripper_reference)
     policy = config.get("policy") or {}
@@ -60,6 +62,11 @@ def prepare_policy(config, selected, directory):
     torch.manual_seed(42)
     evidence = dict(
         checkpoint=str(checkpoint),
+        startup_work_pose=dict(
+            name="A",
+            target_joints_rad=list(teleop_cfg.work_joint_rad),
+            target_gripper_m=teleop_cfg.work_gripper_m,
+        ),
         reference_inputs=str(reference),
         reference_errors=checks,
         reference_scope="FP32 first chunks, locally rebuilt RTC prefixes and projected targets on recorded inputs",
@@ -86,10 +93,11 @@ def run_segment(robot_cfg, teleop_cfg, safety, gripper, predictor, selected, rep
     from .policy_motion import PolicyInput, run_policy_trial
     from .policy_rgb_recording import PolicyRGBRecorder
 
+    from .policy_startup import confirm_work_pose, prepare_work_pose
+
     print(selected["context"]["start_condition"])
-    print("从当前姿态开始。松开LB并回中，建立保持后再按住LB；松LB结束，B急停。")
     print(f"Push-T｜{selected['position']}｜{selected['task']}  上限 {selected['duration_s']} 秒")
-    if input("回车：连接并使能、建立当前位置保持；其他输入：取消。\n> ") != "":
+    if not confirm_work_pose(teleop_cfg, input_fn=input):
         report.update(status="cancelled_before_connection", policy_actions_sent=0)
         return
     with ExitStack() as resources:
@@ -135,9 +143,21 @@ def run_segment(robot_cfg, teleop_cfg, safety, gripper, predictor, selected, rep
                 teleop.connect()
                 inputs = PolicyInput(teleop, robot)
                 inputs.poll()
+                robot.camera_input_poll = inputs.poll
                 robot.emergency_stop_poll = teleop.poll_emergency_stop
                 robot.connect()
                 robot.enable()
+                startup = prepare_work_pose(robot, teleop, control, teleop_cfg, report["rows"])
+                report["startup_A"] = startup
+                if not startup["hold_confirmed"]:
+                    raise RuntimeError("A work pose preparation ended without a confirmed hold")
+                if startup["status"] == "cancelled_held":
+                    report.update(
+                        status="startup_cancelled_held", hold_confirmed=True, policy_actions_sent=0
+                    )
+                    return
+                if startup["status"] != "arrived_held":
+                    raise RuntimeError(f"unexpected A work pose result: {startup['status']}")
                 report.update(
                     run_policy_trial(
                         robot,
