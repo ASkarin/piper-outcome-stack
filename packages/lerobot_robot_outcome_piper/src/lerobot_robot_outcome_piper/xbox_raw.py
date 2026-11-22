@@ -18,6 +18,12 @@ import numpy as np
 from .raw_io import write_json
 
 
+# At 50 Hz, 32 frames buffer 640 ms of disk latency (~28 MiB for 640x480 RGB).
+# Keep room for per-frame telemetry jobs on the same ordered worker.
+MAX_PENDING_FRAMES = 32
+MAX_PENDING_JOBS = 4 * MAX_PENDING_FRAMES
+
+
 class RawFrames:
     is_raw = True
     image_writer = None
@@ -86,11 +92,13 @@ class RawFrames:
             self.check_writer()
             if self._closed:
                 raise RuntimeError("raw writer is closed")
-            if len(self.pending) >= 32 or (
-                frame and sum(is_frame for _, is_frame in self.pending) >= 8
+            if len(self.pending) >= MAX_PENDING_JOBS or (
+                frame and sum(is_frame for _, is_frame in self.pending) >= MAX_PENDING_FRAMES
             ):
+                pending_frames = sum(is_frame for _, is_frame in self.pending)
                 error = RuntimeError(
-                    "raw writer queue full; no frames dropped; episode cannot be saved"
+                    f"raw writer queue full ({pending_frames}/{MAX_PENDING_FRAMES} frames, "
+                    f"{len(self.pending)}/{MAX_PENDING_JOBS} jobs); current attempt cannot be saved"
                 )
                 self._queue_error = error
                 raise error

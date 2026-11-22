@@ -249,12 +249,17 @@ class TelemetryDataset:
                 stream,
             )
 
-    def close(self):
+    def close(self, *, failure=None):
         try:
             if self._raw:
                 self.dataset.close()
         finally:
-            self.log.close()
+            try:
+                # The worker has joined. A saturated queue cannot swallow its own fault.
+                if failure is not None:
+                    self._write_event("failed", **failure)
+            finally:
+                self.log.close()
 
 
 def capture_features(cfg, robot, teleop_action_processor, observation_processor):
@@ -389,6 +394,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
 
     capture_gc = CaptureGC()
     audit = None
+    failure = None
     success = False
     dataset_finalized = False
     interactive = False
@@ -459,16 +465,12 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
         if interactive and robot.is_connected:
             robot.request_input_fault(exc)
         if audit is not None:
-            try:
-                audit.emit(
-                    "failed",
-                    error=f"{type(exc).__name__}: {exc}",
-                    observation=robot.last_observation_telemetry,
-                    action=robot.last_action_telemetry,
-                    stop_outcome=getattr(robot, "stop_outcome", None),
-                )
-            except Exception as log_error:
-                exc.add_note(f"Telemetry failure record could not be written: {log_error}")
+            failure = dict(
+                error=f"{type(exc).__name__}: {exc}",
+                observation=copy.deepcopy(robot.last_observation_telemetry),
+                action=copy.deepcopy(robot.last_action_telemetry),
+                stop_outcome=getattr(robot, "stop_outcome", None),
+            )
         raise
     finally:
         try:
@@ -510,7 +512,7 @@ def record_with_telemetry(cfg, *, teleop_action_processor):
             capture_gc.stop()
             try:
                 if audit is not None:
-                    audit.close()
+                    audit.close(failure=failure)
                 else:
                     dataset.close()
             finally:

@@ -10,7 +10,12 @@ import numpy as np
 import pytest
 from action_evidence import dispatched
 from lerobot_robot_outcome_piper.recording import TelemetryDataset
-from lerobot_robot_outcome_piper.xbox_raw import RawFrames, convert
+from lerobot_robot_outcome_piper.xbox_raw import (
+    MAX_PENDING_FRAMES,
+    MAX_PENDING_JOBS,
+    RawFrames,
+    convert,
+)
 from lerobot_robot_outcome_piper.safety import ACTION_KEYS
 from lerobot_robot_outcome_piper.record_control import EpisodeControls
 from lerobot_robot_outcome_piper.teleop_control import TeleopControl
@@ -101,7 +106,30 @@ def test_prepare_and_ingest_have_no_control_thread_file_io_and_freeze_pixels(tmp
         assert np.all(data["depth"] == 1)
 
 
-def test_blocked_writer_rejects_ninth_frame_without_waiting_or_false_save(tmp_path):
+def test_transient_disk_stall_preserves_every_queued_rgb_and_telemetry_row(tmp_path):
+    raw, robot, audit = setup(tmp_path)
+    audit.prepare_episode().result()
+    release = threading.Event()
+    raw.submit_io(release.wait, 10)
+    try:
+        # Twelve 50 Hz frames span the three slow writes in the real C failure.
+        for index in range(12):
+            audit.add_frame(frame(robot, index))
+    finally:
+        release.set()
+    audit.save_episode()
+    close(raw, audit)
+    attempt = next((raw.root / "attempts").iterdir())
+    assert json.loads((attempt / "result.json").read_text())["frames"] == 12
+    for index, line in enumerate((attempt / "frames.jsonl").read_text().splitlines()):
+        row = json.loads(line)
+        assert row["frame_index"] == index
+        assert np.all(np.load(attempt / row["files"]["observation.images.rgb"]) == index)
+    events = [json.loads(line) for line in (audit.path / "events.jsonl").read_text().splitlines()]
+    assert [e["frame_index"] for e in events if e["event"] == "frame_written"] == list(range(12))
+
+
+def test_blocked_writer_rejects_overflow_without_waiting_or_false_save(tmp_path):
     raw, robot, audit = setup(tmp_path)
     audit.prepare_episode().result()
     entered = threading.Event()
@@ -114,11 +142,11 @@ def test_blocked_writer_rejects_ninth_frame_without_waiting_or_false_save(tmp_pa
     raw.submit_io(block)
     assert entered.wait(2)
     try:
-        for _ in range(8):
+        for _ in range(MAX_PENDING_FRAMES):
             raw.add_frame({"action": np.zeros(7)})
         with pytest.raises(RuntimeError, match="queue full"):
             raw.add_frame({"action": np.zeros(7)})
-        assert raw.frames == 8 and not release.is_set()
+        assert raw.frames == MAX_PENDING_FRAMES and not release.is_set()
     finally:
         release.set()
     with pytest.raises(RuntimeError):
@@ -126,13 +154,19 @@ def test_blocked_writer_rejects_ninth_frame_without_waiting_or_false_save(tmp_pa
     with pytest.raises(RuntimeError):
         raw.finalize()
     with pytest.raises(RuntimeError):
-        audit.close()
+        audit.close(failure={"error": "raw writer queue full"})
+    assert (
+        json.loads((audit.path / "events.jsonl").read_text().splitlines()[-1])["event"] == "failed"
+    )
     raw.finish_capture(False)
     assert all(
         json.loads(p.read_text())["status"] != "saved"
         for p in raw.root.glob("attempts/*/result.json")
     )
-    assert len(next(raw.root.glob("attempts/*/frames.jsonl")).read_text().splitlines()) == 8
+    assert (
+        len(next(raw.root.glob("attempts/*/frames.jsonl")).read_text().splitlines())
+        == MAX_PENDING_FRAMES
+    )
 
 
 def test_phase_events_are_bounded_too(tmp_path):
@@ -148,7 +182,7 @@ def test_phase_events_are_bounded_too(tmp_path):
     raw.submit_io(block)
     assert entered.wait(2)
     try:
-        for _ in range(31):
+        for _ in range(MAX_PENDING_JOBS - 1):
             audit.emit("phase_probe")
         with pytest.raises(RuntimeError, match="queue full"):
             audit.emit("phase_probe")
