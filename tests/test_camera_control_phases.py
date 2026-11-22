@@ -11,6 +11,7 @@ from lerobot_robot_outcome_piper.camera import CameraTelemetry, read_new_frame
 from lerobot_robot_outcome_piper.errors import OutcomePiperCameraError, OutcomePiperStateError
 from lerobot_robot_outcome_piper.robot import PiperState
 from lerobot_robot_outcome_piper.teleop_control import TeleopState
+from lerobot_robot_outcome_piper.stage_timing import reset, snapshot
 
 
 def camera(read):
@@ -109,10 +110,12 @@ def test_stale_cached_frame_is_skipped_and_service_runs_until_fresh():
             cam.latest_metadata = {"color": CameraTelemetry(2, 2.0, "hardware", now, now)}
 
     cam.wait_service = service
+    reset()
     _, meta = read_new_frame(cam, 0.1)
     assert meta["color"].frame_number == 2
     assert cam.last_read_diagnostics["stale_frames_skipped"] == 1
     assert len(calls) == 2
+    assert snapshot()["camera_publication_wait"]["calls"] == 1
 
 
 def test_camera_wait_has_one_deadline_and_can_be_interrupted():
@@ -155,6 +158,7 @@ def test_camera_wait_releases_command_lock_and_services_lb(session):
     with pytest.raises(OutcomePiperCameraError):
         robot.get_observation()
     assert owned == [True]
+    assert snapshot()["camera_input_poll"]["calls"] == 1
     assert robot.stop_outcome == "hold_confirmed"
     assert control.state is TeleopState.FAULT
     assert "electronic_emergency_stop" not in arm.calls

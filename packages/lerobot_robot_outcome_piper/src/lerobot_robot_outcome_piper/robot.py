@@ -837,7 +837,10 @@ class OutcomePiper(Robot):
         return values, width
 
     def _service_camera_wait(self):
-        raw = self.camera_input_poll() if self.camera_input_poll is not None else None
+        raw = None
+        if self.camera_input_poll is not None:
+            with span("camera_input_poll"):
+                raw = self.camera_input_poll()
         if raw is not None and raw.get("emergency_stop"):
             self.request_emergency_stop("Xbox B pressed while waiting for camera")
         with self._command_lock:

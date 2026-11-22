@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import math
 import time
 from .errors import OutcomePiperCameraError
+from .stage_timing import span
 
 
 def observation_camera_features(configs):
@@ -118,4 +119,5 @@ def read_new_frame(camera, timeout_s):
                 raise OutcomePiperCameraError(
                     f"no fresh camera frame within {timeout_s:.6f}s: {detail}"
                 )
-            camera.metadata_condition.wait(min(deadline - now, timeout_s / 4, 0.01))
+            with span("camera_publication_wait"):
+                camera.metadata_condition.wait(min(deadline - now, timeout_s / 4, 0.01))
