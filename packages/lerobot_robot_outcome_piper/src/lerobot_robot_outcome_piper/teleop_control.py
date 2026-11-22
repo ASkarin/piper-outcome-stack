@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
+from .safety import step_within_limit
+
 
 @dataclass(frozen=True)
 class HoldSettings:
@@ -759,7 +761,7 @@ class JointHold:
 
     def within(self, joints):
         return all(
-            abs(a - b) <= self.settings.joint_tolerance_rad
+            math.isfinite(a - b) and step_within_limit(a, b, self.settings.joint_tolerance_rad)
             for a, b in zip(joints, self.target, strict=True)
         )
 

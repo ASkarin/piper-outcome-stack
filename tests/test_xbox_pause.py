@@ -2,12 +2,13 @@
 
 from dataclasses import replace
 from types import SimpleNamespace as NS
+import math
 import threading
 
 import pytest
 
 from test_plugin import make_robot, FakeReceiver, valid_action, xbox_config, FakeJoystick
-from lerobot_robot_outcome_piper.teleop_control import TeleopControl, TeleopState
+from lerobot_robot_outcome_piper.teleop_control import HoldSettings, JointHold, TeleopControl, TeleopState
 from lerobot_robot_outcome_piper.processor import OutcomePiperAction
 from lerobot_robot_outcome_piper.robot import PiperState
 from lerobot_robot_outcome_piper.teleoperator import OutcomePiperXbox
@@ -71,6 +72,21 @@ def settle(session):
 
 def moves(arm):
     return [x for x in arm.calls if isinstance(x, tuple) and x[0] == "move_j"]
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_hold_includes_exact_sdk_tolerance_and_rejects_next_tick(sign):
+    def sdk_angle(millidegrees):
+        return sign * millidegrees * 1e-3 * (math.pi / 180)
+
+    settings = HoldSettings(math.radians(0.1), 0.3, 10)
+    hold = JointHold([sdk_angle(104132)] * 6, settings, 0)
+    limit = [sdk_angle(104032)] * 6
+    assert hold.within(limit)
+    assert not hold.observe(limit, [0.01] * 3, 0.01)
+    assert hold.observe(limit, [0.32] * 3, 0.32)
+    assert not hold.observe([sdk_angle(104031), *limit[1:]], [0.34] * 3, 0.34)
+    assert not hold.within([math.inf, *limit[1:]])
 
 
 def test_startup_requires_release_neutral_and_new_press(session):
@@ -256,12 +272,12 @@ def test_selected_device_removal_routes_to_hold_not_generic_stop(session):
     joystick.get_instance_id = lambda: 42
     xbox = OutcomePiperXbox(xbox_config(), joystick_factory=lambda _: joystick)
     xbox.connect()
-    events = [NS(instance_id=99)]
-    xbox._pygame = NS(JOYDEVICEREMOVED=9, event=NS(pump=lambda: None, get=lambda _: events))
+    events = [NS(type=3), NS(type=9, instance_id=99)]
+    xbox._pygame = NS(JOYDEVICEREMOVED=9, event=NS(get=lambda: events))
     with motion_input_safety_scope():
         register_active_motion_session(robot)
         xbox.get_action()  # Removing a different device is not this input fault.
-        events[:] = [NS(instance_id=42)]
+        events[:] = [NS(type=9, instance_id=42)]
         with pytest.raises(OutcomePiperInputDisconnected):
             xbox.get_action()
     xbox._pygame = None

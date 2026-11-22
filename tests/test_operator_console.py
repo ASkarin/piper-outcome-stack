@@ -73,7 +73,7 @@ def test_xbox_uses_headless_event_display_without_global_pygame_init(monkeypatch
             Joystick=lambda i: joystick,
             quit=lambda: None,
         ),
-        event=NS(pump=lambda: None, get=lambda kind: []),
+        event=NS(get=lambda: []),
         JOYDEVICEREMOVED=1,
         quit=lambda: None,
     )

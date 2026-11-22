@@ -175,13 +175,26 @@ class OutcomePiperXbox(Teleoperator):
             return 0.0
         return activation
 
-    def poll_emergency_stop(self) -> bool:
-        """Poll B during fault-hold confirmation without re-entering input-fault handling."""
+    def _poll_connected(self) -> bool:
         if not self.is_connected:
             return False
         if self._pygame is not None:
-            self._pygame.event.pump()
-        return bool(self._joystick.get_button(self.config.emergency_stop_button))
+            # get() pumps SDL once. Drain axis/button events even though we read their
+            # current levels below, so the control loop never rescans a growing queue.
+            for event in self._pygame.event.get():
+                if (
+                    event.type == self._pygame.JOYDEVICEREMOVED
+                    and event.instance_id == self._joystick.get_instance_id()
+                ):
+                    self._joystick.quit()
+                    return False
+        return True
+
+    def poll_emergency_stop(self) -> bool:
+        """Poll B during fault-hold confirmation without re-entering input-fault handling."""
+        return self._poll_connected() and bool(
+            self._joystick.get_button(self.config.emergency_stop_button)
+        )
 
     def get_action(self) -> dict[str, float | bool]:
         try:
@@ -194,14 +207,8 @@ class OutcomePiperXbox(Teleoperator):
             raise
 
     def _get_action(self) -> dict[str, float | bool]:
-        if not self.is_connected:
+        if not self._poll_connected():
             raise OutcomePiperInputDisconnected("Xbox is disconnected")
-        if self._pygame is not None:
-            self._pygame.event.pump()
-            for event in self._pygame.event.get(self._pygame.JOYDEVICEREMOVED):
-                if event.instance_id == self._joystick.get_instance_id():
-                    self._joystick.quit()
-                    raise OutcomePiperInputDisconnected("selected Xbox was disconnected")
         assert self._joystick is not None
         emergency = bool(self._joystick.get_button(self.config.emergency_stop_button))
         if emergency:

@@ -246,9 +246,8 @@ def xbox_reader(mapping):
         raise
 
     def read():
-        pygame.event.pump()
-        for e in pygame.event.get(pygame.JOYDEVICEREMOVED):
-            if e.instance_id == j.get_instance_id():
+        for e in pygame.event.get():
+            if e.type == pygame.JOYDEVICEREMOVED and e.instance_id == j.get_instance_id():
                 raise InputLost("Xbox disconnected")
         if not j.get_init():
             raise InputLost("Xbox disconnected")
