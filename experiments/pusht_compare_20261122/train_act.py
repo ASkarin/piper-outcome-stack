@@ -22,11 +22,49 @@ from lerobot.utils.constants import IMAGENET_STATS
 from piper_outcome_stack.smolvla_evaluate import evaluate
 from piper_outcome_stack.smolvla_training import make_views, write_json
 from piper_outcome_stack.training import select_policy_inputs
-from piper_outcome_stack.training_windows import CompleteWindows, sampler_class
+from piper_outcome_stack.training_windows import (
+    CompleteWindows,
+    demonstration_weights,
+    sampler_class,
+)
 from piper_policy.positive_act import PositiveACTConfig
 from piper_policy.smolvla import IMAGE_FEATURE
 from piper_policy.statistics import numeric_stats
 from piper_policy.training import act_processors, register_act_factory
+
+
+def training_population(raw, counts, mode):
+    expected = (counts["train"], counts["task_layout_cells"])
+    if mode == "complete":
+        view = CompleteWindows(raw, *expected)
+        return view, view.weights, view.indices, view.summary
+    if mode != "masked_segment_tails":
+        raise ValueError(f"unknown ACT window sampling mode: {mode}")
+    # RetainedDataset already returns segment-local targets and action_is_pad for every frame.
+    weights, cells = demonstration_weights(raw.starts, raw.ends, raw.lineage, *expected)
+    # Keep the normalization population identical to the complete-window baseline.
+    # Using the new sampling indices here would cross boundaries and contaminate the statistics.
+    normalization_indices = np.asarray(
+        [
+            i
+            for start, end in zip(raw.starts, raw.ends, strict=True)
+            for i in range(start, end - raw.chunk_size + 1)
+        ],
+        dtype=np.int64,
+    )
+    if not len(normalization_indices):
+        raise ValueError("the matched ACT normalizer requires complete training windows")
+    summary = dict(
+        original_demos=counts["train"],
+        window_sampling=mode,
+        training_starts=len(raw),
+        complete_window_starts=len(normalization_indices),
+        masked_tail_starts=len(raw) - len(normalization_indices),
+        retained_segments=raw.num_episodes,
+        eligible_segments=raw.num_episodes,
+        cells=cells,
+    )
+    return raw, weights, normalization_indices, summary
 
 
 def run(spec):
@@ -35,14 +73,15 @@ def run(spec):
         raise FileExistsError(output)
     raw, development = make_views(spec)
     counts = spec["demonstrations"]
-    training = CompleteWindows(raw, counts["train"], counts["task_layout_cells"])
+    training, weights, starts, summary = training_population(
+        raw, counts, spec.get("window_sampling", "complete")
+    )
     dev_ids = {(r["source_session"], r["source_episode"]) for r in development.lineage}
     if len(dev_ids) != counts["development"]:
         raise ValueError("original development demonstration count differs")
     # Normalize each future absolute target relative to the state at its generation anchor.
-    # The retained view guarantees that every training horizon stays inside one valid segment.
+    # Only the original complete, segment-local horizons contribute to these statistics.
     horizon = spec["input_contract"]["chunk_size"]
-    starts = training.indices
     relative = raw.actions[starts[:, None] + np.arange(horizon)] - raw.states[starts, None, :]
     relative_stats = numeric_stats(relative.reshape(-1, 7))
     del relative
@@ -99,7 +138,7 @@ def run(spec):
     write_json(
         root / "dataset-view.json",
         dict(
-            train=training.summary,
+            train=summary,
             train_state_statistics=stats["observation.state"],
             relative_action_statistics=relative_stats,
             development_demos=len(dev_ids),
@@ -156,6 +195,9 @@ def run(spec):
                 ),
             )
             status["first_batch_indices"] = batch["index"].detach().cpu().tolist()
+            status["first_batch_valid_action_steps"] = (
+                (~batch["action_is_pad"]).sum(dim=1).cpu().tolist()
+            )
         updated = official_update(*args, **kwargs)
         if not all(np.isfinite(v) for v in updated[1].values() if isinstance(v, (float, int))):
             raise ValueError("nonfinite ACT objective")
@@ -175,7 +217,7 @@ def run(spec):
             for name, fn in [
                 ("make_train_eval_datasets", lambda cfg: (training, subset)),
                 ("make_pre_post_processors", processors),
-                ("EpisodeAwareSampler", sampler_class(training)),
+                ("EpisodeAwareSampler", sampler_class(training, weights=weights)),
                 ("update_policy", update),
             ]:
                 stack.enter_context(patch.object(upstream, name, fn))

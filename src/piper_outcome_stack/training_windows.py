@@ -1,4 +1,4 @@
-"""Complete-window, source-demonstration-balanced sampling for the real policy comparisons."""
+"""Source-demonstration-balanced sampling for retained robot action windows."""
 
 from collections import defaultdict
 from copy import copy
@@ -13,11 +13,37 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def demonstration_weights(starts, ends, lineage, expected_demos, expected_cells):
+    """Assign equal probability to each cell, then each original demo, then its starts."""
+    groups, cells = defaultdict(list), defaultdict(set)
+    for start, end, source in zip(starts, ends, lineage, strict=True):
+        demo = (source["source_session"], source["source_episode"])
+        cell = (source["task"], source["layout"])
+        groups[demo].extend(range(start, end))
+        cells[cell].add(demo)
+    require(
+        len(groups) == expected_demos and len(cells) == expected_cells,
+        f"window demo/cell coverage differs: {len(groups)}/{len(cells)}",
+    )
+    weights = torch.zeros(ends[-1], dtype=torch.float64)
+    for demos in cells.values():
+        for demo in demos:
+            weights[groups[demo]] = 1.0 / (len(cells) * len(demos) * len(groups[demo]))
+    require(
+        bool((weights > 0).all()) and abs(float(weights.sum()) - 1) < 1e-10,
+        "sampling mass does not sum to one",
+    )
+    cells_summary = [
+        dict(task=task, layout=layout, demos=len(demos), probability=1 / len(cells))
+        for (task, layout), demos in sorted(cells.items())
+    ]
+    return weights, cells_summary
+
+
 class CompleteWindows(Dataset):
     def __init__(self, base, expected_demos, expected_cells=8):
         self.base = base
         self.indices, starts, ends, self.lineage = [], [], [], []
-        groups, cells = defaultdict(list), defaultdict(set)
         for start, end, source in zip(base.starts, base.ends, base.lineage, strict=True):
             if end - start < 50:
                 continue
@@ -26,21 +52,8 @@ class CompleteWindows(Dataset):
             starts.append(begin)
             ends.append(len(self.indices))
             self.lineage.append(source)
-            demo = (source["source_session"], source["source_episode"])
-            cell = (source["task"], source["layout"])
-            groups[demo].extend(range(begin, len(self.indices)))
-            cells[cell].add(demo)
-        require(
-            len(groups) == expected_demos and len(cells) == expected_cells,
-            f"complete-window demo/cell coverage differs: {len(groups)}/{len(cells)}",
-        )
-        self.weights = torch.zeros(len(self.indices), dtype=torch.float64)
-        for cell, demos in cells.items():
-            for demo in demos:
-                self.weights[groups[demo]] = 1.0 / (len(cells) * len(demos) * len(groups[demo]))
-        require(
-            bool((self.weights > 0).all()) and abs(float(self.weights.sum()) - 1) < 1e-10,
-            "sampling mass does not sum to one",
+        self.weights, cells_summary = demonstration_weights(
+            starts, ends, self.lineage, expected_demos, expected_cells
         )
         self.indices = np.asarray(self.indices, dtype=np.int64)
         self.num_frames, self.num_episodes = len(self.indices), len(starts)
@@ -57,14 +70,11 @@ class CompleteWindows(Dataset):
             length=[b - a for a, b in zip(starts, ends)],
         )
         self.summary = dict(
-            original_demos=len(groups),
+            original_demos=expected_demos,
             complete_window_starts=len(self),
             retained_segments=base.num_episodes,
             eligible_segments=self.num_episodes,
-            cells=[
-                dict(task=t, layout=layout, demos=len(v), probability=1 / len(cells))
-                for (t, layout), v in sorted(cells.items())
-            ],
+            cells=cells_summary,
         )
 
     def __len__(self):
@@ -76,7 +86,9 @@ class CompleteWindows(Dataset):
         return item
 
 
-def sampler_class(training):
+def sampler_class(training, *, weights=None):
+    sampling_weights = training.weights if weights is None else weights
+
     class BalancedSampler(Sampler):
         def __init__(
             self,
@@ -95,7 +107,7 @@ def sampler_class(training):
                 and drop_n_last_frames == 0
                 and shuffle
                 and absolute_to_relative_idx is None,
-                "upstream sampler invocation differs from complete-window contract",
+                "upstream sampler invocation differs from the retained-window contract",
             )
             require(
                 episode_indices_to_use == training.episodes, "sampler episode selection differs"
@@ -110,7 +122,7 @@ def sampler_class(training):
             self.epoch += 1
             return iter(
                 torch.multinomial(
-                    training.weights, len(self), replacement=True, generator=generator
+                    sampling_weights, len(self), replacement=True, generator=generator
                 ).tolist()
             )
 
