@@ -185,12 +185,22 @@ def test_smolvla_routes_frozen_recipe_and_verify_only_does_not_load_models(tmp_p
 
 
 @pytest.mark.parametrize(
-    ("extra", "split"), [([], "train"), (["--split", "development"], "development")]
+    ("extra", "start", "split", "goal_count"),
+    [
+        ([], "03", "train", 50),
+        (["--split", "development"], "03", "development", 6),
+        (["--start", "01"], "01", "train", 20),
+        (["--start", "02"], "02", "train", 20),
+        (["--start", "01", "--split", "development"], "01", "development", 4),
+        (["--split", "development", "--start", "02"], "02", "development", 4),
+    ],
 )
-def test_pusht_record_shortcut(tmp_path, monkeypatch, extra, split):
+def test_pusht_record_shortcut(tmp_path, monkeypatch, extra, start, split, goal_count):
     p = profile(tmp_path)
-    start, goal = tmp_path / "start-03.png", tmp_path / "target-G.png"
-    start.touch()
+    reference, goal = tmp_path / "start-03.png", tmp_path / "target-G.png"
+    reference.touch()
+    selected_reference = tmp_path / f"start-{start}.png"
+    selected_reference.touch()
     goal.touch()
     cfg = {
         "robot": {
@@ -200,7 +210,7 @@ def test_pusht_record_shortcut(tmp_path, monkeypatch, extra, split):
         "teleop": {},
         "dataset": {"fps": 50, "num_episodes": 2},
         "task_c": {
-            "start_reference": str(start),
+            "start_reference": str(reference),
             "goal_reference": str(goal),
             "position_id": "start-03",
             "duration_s": 2,
@@ -223,12 +233,21 @@ def test_pusht_record_shortcut(tmp_path, monkeypatch, extra, split):
     assert (
         f"/task-c/{split}/" in saved["raw_root"] and f"/task-c/{split}/" in saved["dataset"]["root"]
     )
-    assert saved["recording_split"] == split and saved["recording_position"] == "start-03"
-    assert saved["recording_tasks"] == {"3": saved["dataset"]["single_task"]}
+    assert saved["recording_split"] == split and saved["recording_position"] == f"start-{start}"
+    assert saved["recording_tasks"] == {str(int(start)): saved["dataset"]["single_task"]}
+    assert saved["recording_context"]["start_id"] == saved["recording_position"]
+    assert saved["recording_context"]["start_reference"] == str(selected_reference)
+    assert saved["recording_context"]["goal_reference"] == str(goal)
     assert saved["recording_target_precision"] == "fine"
-    assert saved["dataset"]["num_episodes"] == (50 if split == "train" else 6)
+    assert saved["dataset"]["num_episodes"] == goal_count
     assert saved["robot"]["cameras"]["d435"] == {"use_rgb": True, "use_depth": False}
     assert not saved["export_depth"]
+
+
+@pytest.mark.parametrize("mode", ["a", "b"])
+def test_record_start_is_specific_to_push_t(mode, tmp_path):
+    with pytest.raises(ValueError, match="--start"):
+        op.execute(NS(command="record", mode=mode, start="01"), profile(tmp_path))
 
 
 def test_c_check_uses_active_config_without_privileges(tmp_path, monkeypatch):

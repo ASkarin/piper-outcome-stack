@@ -10,6 +10,7 @@ No service, CAN setup, new backend or sudo permission is installed.
 | `piper act SKILL 1` | Run the configured fixed ACT bundle; `--verify-only` checks assets without device I/O. |
 | `piper record` | New Xbox raw capture; existing LB/X/RB/A/Y/B controls. |
 | `piper record c` | 第三种起点的 Push‑T 初始为常规档，训练连续采 50 条有效成功示范。补采开发集用 `piper record c --split development`，目标为 6 条。 |
+| `piper record c --start 01` 或 `--start 02` | 一个起点一个会话，准备界面输入 `1` 或 `2`。每个新起点训练目标 20 条，加 `--split development` 另采 4 条开发示范。 |
 | `piper record b --split train` | B training capture: choose layout, then choose a task for each episode. |
 | `piper record b --split development` | B development capture in a separate session: choose layout, then task. |
 | `piper status` | Fixed passive status query. |

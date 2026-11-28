@@ -169,6 +169,9 @@ def execute(args, profile):
         return subprocess.call(["sudo", "-n", "/usr/local/sbin/piper-query", args.command])
     if args.command == "record":
         mode = getattr(args, "mode", "a")
+        start = getattr(args, "start", None)
+        if start is not None and mode != "c":
+            raise ValueError("--start 仅用于 C 采集")
         if (mode == "a" and getattr(args, "split", None)) or (
             mode != "b" and getattr(args, "layout", None)
         ):
@@ -204,9 +207,9 @@ def execute(args, profile):
         elif mode == "c":
             from piper_outcome_stack.task_c import configure_recording
 
-            cfg = configure_recording(cfg, args.split or "train")
+            cfg = configure_recording(cfg, args.split or "train", start=start or "03")
             print(
-                f"Push-T {cfg['recording_split']}｜初始常规档 100%｜"
+                f"Push-T {cfg['recording_position']}｜{cfg['recording_split']}｜初始常规档 100%｜"
                 f"本会话目标 {cfg['dataset']['num_episodes']} 条含有效精细档操作的成功示范。"
             )
         if mode in ("b", "c"):
@@ -310,6 +313,7 @@ def main(argv=None):
     record.add_argument("mode", nargs="?", choices=("a", "b", "c"), default="a")
     record.add_argument("--layout", choices=("1", "2"))
     record.add_argument("--split", choices=("train", "development"))
+    record.add_argument("--start", choices=("01", "02", "03"), help="C 采集起点，默认 03")
     act = sub.add_parser("act", help="Run the selected frozen ACT bundle")
     act.add_argument("skill", choices=("green-left", "green-right", "blue-left", "blue-right"))
     act.add_argument("layout", choices=("1", "2"))

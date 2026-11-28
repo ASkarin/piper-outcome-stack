@@ -44,6 +44,10 @@ def test_fixed_start_and_goal_recording(c_config, split):
 def test_other_start_missing_reference_or_budget_is_refused(c_config):
     with pytest.raises(ValueError, match="train or development"):
         task_c.configure_recording(c_config, None)
+    with pytest.raises(ValueError, match="Unknown Push-T start"):
+        task_c.configure_recording(c_config, "train", "04")
+    with pytest.raises(FileNotFoundError, match="start-02.png"):
+        task_c.configure_recording(c_config, "train", "02")
     c_config["task_c"]["position_id"] = "start-02"
     with pytest.raises(ValueError, match="start-03"):
         task_c.select_task(c_config)
@@ -151,3 +155,10 @@ def test_batch_manifest_keeps_the_whole_mixed_demonstration_and_older_fine_rows(
     selection = task_c.capture_manifest([tmp_path])["sources"]["train"][0]
     assert [s["dataset_episode"] for s in selection["segments"]] == [0, 1, 2]
     assert selection["excluded"] == [dict(episode=3, outcome="success", precision="normal")]
+    outcomes[0] = dict(mixed, position_id="start-02")
+    with pytest.raises(ValueError, match="episode position"):
+        task_c.capture_manifest([tmp_path])
+    config["recording_position"] = "start-02"
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="start metadata"):
+        task_c.capture_manifest([tmp_path])

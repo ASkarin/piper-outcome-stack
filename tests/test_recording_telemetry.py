@@ -425,9 +425,9 @@ def test_centered_gripper_updates_hold_reference_without_faking_joint_writes(tmp
 
 
 @pytest.mark.parametrize("redo", [False, True])
-@pytest.mark.parametrize("c_skill", [None, "push_to_G"])
+@pytest.mark.parametrize("c_start", [None, "03", "01", "02"])
 def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
-    tmp_path, monkeypatch, redo, c_skill
+    tmp_path, monkeypatch, redo, c_start
 ):
     from lerobot_robot_outcome_piper.teleop_control import TeleopControl
     from lerobot_robot_outcome_piper.scene import SceneContext
@@ -439,7 +439,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     robot, teleop, _, _ = devices(monkeypatch)
     # Preparation/resume may already have advanced the synthetic clock past 1 s.
     robot._observation_count = 25
-    outcome_label = "success" if c_skill and not redo else "failure"
+    outcome_label = "success" if c_start and not redo else "failure"
     scene = SceneContext(
         "synthetic-new-table",
         "synthetic fixed base",
@@ -447,7 +447,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
         "synthetic four positions",
     )
     robot.config.scene = scene
-    fine_batch = c_skill and not redo
+    fine_batch = c_start and not redo
     c = TeleopControl(initial_precision="fine" if fine_batch else "normal")
     send = robot.send_action
 
@@ -520,7 +520,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
             assert self.count < 500, "interactive phase stalled"
             phase = c.recording_phase
             if phase == "preparing" and "start" not in self.sent:
-                return "3" if c_skill else "start p1"
+                return str(int(c_start)) if c_start else "start p1"
             if phase == "recording":
                 self.sent.add("start")
                 return "end"
@@ -530,6 +530,8 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
                 return "redo"
             if phase == "review" and "save" not in self.sent:
                 self.sent.add("save")
+                if c_start:
+                    return "1 直接收尾" if outcome_label == "success" else "2 外推未完成"
                 return "save " + outcome_label
             return None
 
@@ -539,12 +541,13 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     cfg.robot.capture_timing = None
     cfg.raw_root = str(tmp_path / "raw")
     cfg.teleop = xbox_config(control_hz=30)
-    if c_skill:
+    if c_start:
         from piper_outcome_stack.task_c import select_task
 
         start, goal = tmp_path / "start.png", tmp_path / "goal.png"
         start.touch()
         goal.touch()
+        (tmp_path / f"start-{c_start}.png").touch()
         selected = select_task(
             {
                 "robot": {"scene": {"scene_id": scene.scene_id}},
@@ -555,9 +558,10 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
                     "duration_s": 0.001,
                 },
             },
+            position=f"start-{c_start}",
         )
         cfg.recording_context = selected["context"]
-        cfg.recording_tasks = {"3": selected["task"]}
+        cfg.recording_tasks = {str(int(c_start)): selected["task"]}
         cfg.recording_position = selected["position"]
         cfg.recording_split = "development"
         if fine_batch:
@@ -579,7 +583,9 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     )
     outcome = next(e for e in events if e["event"] == "episode_outcome")
     assert outcome["task_outcome"] == outcome_label and outcome["data_valid"] is True
-    if c_skill:
+    if c_start:
+        assert outcome["position_id"] == f"start-{c_start}"
+        assert outcome["note"] == ("直接收尾" if outcome_label == "success" else "外推未完成")
         for event in ("episode_started", "episode_save_requested", "episode_outcome"):
             matching = [e for e in events if e["event"] == event]
             assert matching and all(e["task_context"] == selected["context"] for e in matching)
@@ -599,7 +605,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     cfg.resume = True
     cfg.dataset.repo_id = ds.repo_id
     cfg.robot.scene = SceneContext("another-scene", "base", "view", "area")
-    error = "C recording context" if c_skill else "resume schema or scene differs"
+    error = "C recording context" if c_start else "resume schema or scene differs"
     with pytest.raises(ValueError, match=error):
         record_with_telemetry(cfg, teleop_action_processor=pipeline)
 
@@ -610,7 +616,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
     convert(resumed.root, next_output, cfg.dataset.repo_id)
     reloaded = LeRobotDataset(cfg.dataset.repo_id, root=next_output)
     assert verify_telemetry(next_output, reloaded) == {"episodes": 2, "frames": 2}
-    if c_skill:
+    if c_start:
         from piper_outcome_stack.task_c import capture_manifest
         from piper_outcome_stack.retained_dataset import RetainedDataset
 
@@ -621,6 +627,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
                 {
                     "dataset": {"root": str(next_output), "repo_id": cfg.dataset.repo_id},
                     "recording_split": "development",
+                    "recording_position": cfg.recording_position,
                     "recording_context": selected["context"],
                     **({"recording_target_precision": "fine"} if fine_batch else {}),
                 }
@@ -628,6 +635,7 @@ def test_interactive_scene_record_finalize_reload_and_scene_resume_rejection(
         )
         manifest = capture_manifest([session])
         source = manifest["sources"]["development"][0]
+        assert source["start_id"] == f"start-{c_start}"
         assert len(source["segments"]) == (2 if outcome_label == "success" else 0)
         assert len(source["excluded"]) == (0 if outcome_label == "success" else 2)
         if source["segments"]:

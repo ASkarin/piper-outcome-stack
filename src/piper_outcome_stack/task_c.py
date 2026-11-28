@@ -8,7 +8,11 @@ from pathlib import Path
 
 SKILL = "push_to_G"
 POSITION = "start-03"
-SUCCESS_GOALS = {"train": 50, "development": 6}
+STARTS = {
+    "start-01": {"label": "第一种", "train": 20, "development": 4},
+    "start-02": {"label": "第二种", "train": 20, "development": 4},
+    POSITION: {"label": "第三种", "train": 50, "development": 6},
+}
 INSTRUCTION = "在桌面推动 T 块，使位置和朝向与目标 G 对齐，再退出观察区。"
 
 # Stage C uses the closeout RTC settings and the validated full-precision inference path.
@@ -41,34 +45,39 @@ def text_field(value, name):
     return value
 
 
-def select_task(config):
+def select_task(config, *, position=POSITION):
     meta = config.get("task_c") or {}
     scene = (config.get("robot") or {}).get("scene") or {}
+    if position not in STARTS:
+        raise ValueError(f"Unknown Push-T start: {position}")
     context = {
         "task_family": "C",
         "skill_id": SKILL,
-        "start_id": POSITION,
+        "start_id": position,
         "scene_id": text_field(scene.get("scene_id"), "robot.scene.scene_id"),
-        "start_condition": "按第三种参考图摆放 T 块，保留自然复位误差。",
+        "start_condition": f"按{STARTS[position]['label']}参考图摆放 T 块，保留自然复位误差。",
         "success_description": "推动 T 块对齐 G 的三个角标，撤开夹爪后 T 块保持对齐。",
     }
     if meta.get("position_id") != POSITION:
         raise ValueError(f"C requires position_id={POSITION}")
     for key in ("start_reference", "goal_reference"):
         value = text_field(meta.get(key), f"task_c.{key}")
+        if key == "start_reference" and position != POSITION:
+            value = str(Path(value).with_name(f"{position}.png"))
         if not Path(value).is_file():
             raise FileNotFoundError(f"C {key}: {value}")
         context[key] = value
     duration = meta.get("duration_s")
     if type(duration) not in (int, float) or not math.isfinite(duration) or duration <= 0:
         raise ValueError("C configuration requires positive task_c.duration_s")
-    return dict(task=INSTRUCTION, context=context, duration_s=duration, position=POSITION)
+    return dict(task=INSTRUCTION, context=context, duration_s=duration, position=position)
 
 
-def configure_recording(config, split):
-    if split not in SUCCESS_GOALS:
+def configure_recording(config, split, start="03"):
+    if split not in ("train", "development"):
         raise ValueError("C recording requires train or development")
-    selected = select_task(config)
+    position = f"start-{start}"
+    selected = select_task(config, position=position)
     cfg = deepcopy(config)
     cfg.pop("task_c")
     cfg.pop("policy", None)
@@ -78,16 +87,16 @@ def configure_recording(config, split):
     dataset.update(
         single_task=selected["task"],
         episode_time_s=selected["duration_s"],
-        num_episodes=SUCCESS_GOALS[split],
+        num_episodes=STARTS[position][split],
     )
     cfg.update(
-        recording_tasks={"3": selected["task"]},
-        recording_position=POSITION,
+        recording_tasks={str(int(start)): selected["task"]},
+        recording_position=position,
         recording_split=split,
         recording_task_goal=None,
         recording_target_precision="fine",
         recording_context=selected["context"],
-        recording_layout_description="第三种起点，终点为桌面三个角标 G。",
+        recording_layout_description=f"{STARTS[position]['label']}起点，终点为桌面三个角标 G。",
     )
     return cfg
 
@@ -112,21 +121,25 @@ def capture_manifest(sessions):
         split = config["recording_split"]
         if split not in sources:
             raise ValueError("C capture manifest supports train/development sessions")
+        context = config.get("recording_context") or {}
+        position = context.get("start_id")
+        if (
+            context.get("task_family") != "C"
+            or context.get("skill_id") != SKILL
+            or position not in STARTS
+            or config.get("recording_position", position) != position
+        ):
+            raise ValueError("manifest requires consistent C skill and start metadata")
         segments, excluded = [], []
         required_precision = config.get("recording_target_precision")
         for index in range(dataset.num_episodes):
             outcome = outcomes.get(index)
             if outcome is None:
                 raise ValueError(f"C episode {index} is missing its outcome label")
-            context = outcome.get("task_context")
-            if context != config.get("recording_context") or not context:
+            if outcome.get("task_context") != context:
                 raise ValueError("C episode context differs from its capture configuration")
-            if (
-                context.get("task_family") != "C"
-                or context.get("skill_id") != SKILL
-                or context.get("start_id") != POSITION
-            ):
-                raise ValueError("manifest requires C skill metadata")
+            if outcome.get("position_id", position) != position:
+                raise ValueError("C episode position differs from its capture configuration")
             if outcome["intended_split"] != split:
                 raise ValueError("C episode split differs from its capture configuration")
             source_session = outcome.get("source_session", outcome["session"])
@@ -179,7 +192,13 @@ def capture_manifest(sessions):
                 )
             )
         sources[split].append(
-            dict(root=str(root), repo_id=dataset.repo_id, segments=segments, excluded=excluded)
+            dict(
+                root=str(root),
+                repo_id=dataset.repo_id,
+                start_id=position,
+                segments=segments,
+                excluded=excluded,
+            )
         )
     return dict(
         task_family="C", split_unit="source_session_and_chain", sources=sources, hardware_io=False
